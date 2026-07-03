@@ -28,6 +28,7 @@ function makeData(overrides: Partial<HeadingsData> = {}): HeadingsData {
     h1Count: 1,
     skippedLevels: [],
     sizeInversions: [],
+    sizeEqualities: [],
     levelSizes: { 1: [48], 2: [32], 3: [24] },
     hasLogicalOrder: true,
     ...overrides,
@@ -128,6 +129,23 @@ describe('checkHeadings', () => {
         expect.objectContaining({
           id: 'heading-size-inversion',
           severity: 'error',
+        })
+      );
+    });
+
+    it('warns when adjacent levels have the same size', () => {
+      const h1 = makeHeading(1, 'H1', 32, 0);
+      const h2 = makeHeading(2, 'H2', 32, 1);
+      const v = checkHeadings(
+        makeData({
+          sizeEqualities: [{ a: h1, b: h2 }],
+          levelSizes: { 1: [32], 2: [32] },
+        })
+      );
+      expect(v).toContainEqual(
+        expect.objectContaining({
+          id: 'heading-size-equality',
+          severity: 'warn',
         })
       );
     });

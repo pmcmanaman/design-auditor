@@ -8,6 +8,7 @@ export function checkHeadings(data: HeadingsData): Violation[] {
     h1Count,
     skippedLevels,
     sizeInversions,
+    sizeEqualities,
     levelSizes,
     hasLogicalOrder,
   } = data;
@@ -95,6 +96,19 @@ export function checkHeadings(data: HeadingsData): Violation[] {
       id: 'heading-size-inversion',
       severity: 'error',
       message: 'Heading sizes break visual hierarchy',
+      hint: examples,
+    });
+  } else if (sizeEqualities.length > 0) {
+    const examples = sizeEqualities
+      .slice(0, 2)
+      .map(
+        ({ a, b }) => `H${a.level} = H${b.level} (${Math.round(a.fontSize)}px)`
+      )
+      .join(', ');
+    violations.push({
+      id: 'heading-size-equality',
+      severity: 'warn',
+      message: 'Adjacent heading levels have the same size',
       hint: examples,
     });
   } else {

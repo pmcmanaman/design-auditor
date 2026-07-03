@@ -30,15 +30,21 @@ export async function extractTypography(page: Page): Promise<TypographyData> {
     >();
 
     elements.forEach((el) => {
-      const style = window.getComputedStyle(el);
-      const family = style.fontFamily.split(',')[0].replace(/['"]/g, '').trim();
-      const size = style.fontSize;
-      const weight = style.fontWeight;
-      const lineHeight = style.lineHeight;
       const tag = el.tagName.toLowerCase();
 
       // skip service tags
       if (['script', 'style', 'meta', 'head', 'link'].includes(tag)) return;
+
+      const style = window.getComputedStyle(el);
+
+      // skip invisible elements — hidden menus/modals inflate font stats
+      if (style.display === 'none' || style.visibility === 'hidden') return;
+
+      const family = style.fontFamily.split(',')[0].replace(/['"]/g, '').trim();
+      const size = style.fontSize;
+      const weight = style.fontWeight;
+      const lineHeight = style.lineHeight;
+
       if (!family || family === '') return;
 
       if (!fontsMap.has(family)) {

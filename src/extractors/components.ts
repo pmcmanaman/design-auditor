@@ -52,29 +52,30 @@ export async function extractComponents(page: Page): Promise<ComponentsData> {
       )
     );
 
+    // check interactive states via CSS rules (not simulation — expensive).
+    // Page-global check, so scan stylesheets ONCE, not per button
+    let hasHoverStyle = false;
+    let hasFocusStyle = false;
+    let hasDisabledStyle = false;
+
+    for (const sheet of Array.from(document.styleSheets)) {
+      try {
+        const rules = Array.from(sheet.cssRules || []);
+        for (const rule of rules) {
+          const text = rule.cssText || '';
+          if (text.includes(':hover')) hasHoverStyle = true;
+          if (text.includes(':focus')) hasFocusStyle = true;
+          if (text.includes(':disabled')) hasDisabledStyle = true;
+        }
+        if (hasHoverStyle && hasFocusStyle && hasDisabledStyle) break;
+      } catch {
+        // cross-origin stylesheet (e.g. Google Fonts CDN) — skip and continue
+      }
+    }
+
     const buttons = buttonEls.map((el) => {
       const style = window.getComputedStyle(el);
       const rect = el.getBoundingClientRect();
-
-      // check hover via CSS rules (not simulation — expensive)
-      const sheets = Array.from(document.styleSheets);
-      let hasHoverStyle = false;
-      let hasFocusStyle = false;
-      let hasDisabledStyle = false;
-
-      for (const sheet of sheets) {
-        try {
-          const rules = Array.from(sheet.cssRules || []);
-          for (const rule of rules) {
-            const text = rule.cssText || '';
-            if (text.includes(':hover')) hasHoverStyle = true;
-            if (text.includes(':focus')) hasFocusStyle = true;
-            if (text.includes(':disabled')) hasDisabledStyle = true;
-          }
-        } catch {
-          // cross-origin stylesheet (e.g. Google Fonts CDN) — skip and continue
-        }
-      }
 
       return {
         tag: el.tagName.toLowerCase(),

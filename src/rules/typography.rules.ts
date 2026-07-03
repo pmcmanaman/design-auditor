@@ -102,6 +102,12 @@ export function checkTypography(data: TypographyData): Violation[] {
       message: 'Font sizes do not follow a modular scale',
       hint: 'Try Major Third (1.25) or Perfect Fourth (1.333): 12 → 15 → 19 → 24 → 30...',
     });
+  } else {
+    violations.push({
+      id: 'modular-scale-ok',
+      severity: 'pass',
+      message: 'Font sizes follow a modular scale',
+    });
   }
 
   // 4. Unique line-height count

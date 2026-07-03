@@ -35,10 +35,8 @@ export async function extractLinks(page: Page): Promise<LinksData> {
         const rules = Array.from(sheet.cssRules || []);
         for (const rule of rules) {
           const text = rule.cssText || '';
-          if (text.includes('a:visited') || text.includes('a:visited'))
-            hasVisitedStyle = true;
-          if (text.includes('a:focus') || text.includes(':focus-visible'))
-            hasFocusStyle = true;
+          if (text.includes(':visited')) hasVisitedStyle = true;
+          if (text.includes(':focus')) hasFocusStyle = true;
         }
       } catch {
         /* cross-origin stylesheet — skip and continue */

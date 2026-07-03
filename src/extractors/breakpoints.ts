@@ -52,7 +52,10 @@ function detectKnownSystem(values: number[]): string | null {
 
 export async function extractBreakpoints(page: Page): Promise<BreakpointsData> {
   const raw = await page.evaluate(() => {
-    const bpMap = new Map<string, { query: string; count: number }>();
+    const bpMap = new Map<
+      string,
+      { query: string; type: string; count: number }
+    >();
 
     try {
       const sheets = Array.from(document.styleSheets);
@@ -72,27 +75,31 @@ export async function extractBreakpoints(page: Page): Promise<BreakpointsData> {
               const condition =
                 rule.conditionText || rule.media?.mediaText || '';
 
-              // extract numeric value from "(max-width: 768px)"
-              const match = condition.match(
-                /\((?:max|min)-width:\s*(\d+(?:\.\d+)?)(px|em|rem)\)/i
+              // capture every value, incl. combined queries like
+              // "(min-width: 768px) and (max-width: 1024px)"
+              const matches = condition.matchAll(
+                /\((min|max)-width:\s*(\d+(?:\.\d+)?)(px|em|rem)\)/gi
               );
-              if (match) {
-                let value = parseFloat(match[1]);
-                const unit = match[2].toLowerCase();
+              for (const match of matches) {
+                const type = `${match[1].toLowerCase()}-width`;
+                let value = parseFloat(match[2]);
+                const unit = match[3].toLowerCase();
 
                 // convert em/rem to px (approximately, based on 16px)
                 if (unit === 'em' || unit === 'rem')
                   value = Math.round(value * 16);
 
-                const key = `${value}`;
+                const key = `${value}|${type}`;
                 if (!bpMap.has(key)) {
-                  bpMap.set(key, { query: condition, count: 0 });
+                  bpMap.set(key, { query: condition, type, count: 0 });
                 }
                 bpMap.get(key)!.count++;
               }
+            }
 
-              // recursively process nested rules
-              if (rule.cssRules) processRules(rule.cssRules);
+            // recursively process nested rules (@media, @supports, @layer)
+            if ('cssRules' in rule && (rule as CSSGroupingRule).cssRules) {
+              processRules((rule as CSSGroupingRule).cssRules);
             }
           }
         };
@@ -103,28 +110,29 @@ export async function extractBreakpoints(page: Page): Promise<BreakpointsData> {
       /* ignore */
     }
 
-    return Array.from(bpMap.entries()).map(([value, data]) => ({
-      value: parseInt(value),
+    return Array.from(bpMap.entries()).map(([key, data]) => ({
+      value: parseFloat(key.split('|')[0]),
       query: data.query,
+      type: data.type,
       count: data.count,
     }));
   });
 
-  // determine breakpoint type (min or max)
   const breakpoints: BreakpointEntry[] = raw
     .map((bp) => ({
       value: bp.value,
       query: bp.query,
-      type: bp.query.includes('max-width')
-        ? ('max-width' as const)
-        : bp.query.includes('min-width')
-          ? ('min-width' as const)
-          : ('other' as const),
+      type:
+        bp.type === 'max-width'
+          ? ('max-width' as const)
+          : bp.type === 'min-width'
+            ? ('min-width' as const)
+            : ('other' as const),
       count: bp.count,
     }))
     .sort((a, b) => a.value - b.value);
 
-  const uniqueValues = breakpoints.map((bp) => bp.value);
+  const uniqueValues = [...new Set(breakpoints.map((bp) => bp.value))];
 
   // strategy: mobile-first = predominantly min-width
   const minCount = breakpoints.filter((bp) => bp.type === 'min-width').length;

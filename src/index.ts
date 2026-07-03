@@ -1,6 +1,9 @@
 #!/usr/bin/env node
+import { readFileSync } from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { Command } from 'commander';
-import { chromium } from 'playwright';
+import { chromium, Page } from 'playwright';
 import ora from 'ora';
 import { extractTypography } from '@extractors/typography.js';
 import { extractRhythm } from '@extractors/rhythm.js';
@@ -23,22 +26,98 @@ import { checkHeadings } from '@rules/headings.rules.js';
 import { printHeader, printReport, printScore } from '@reporters/terminal.js';
 import { buildJsonReport, saveReport } from '@reporters/json.js';
 import { calculateScore } from '@utils/score.js';
-import { ModuleReport } from '@/types.js';
+import { ModuleReport, Violation } from '@/types.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const pkg = JSON.parse(
+  readFileSync(path.join(__dirname, '..', 'package.json'), 'utf-8')
+);
+
+interface AuditModule {
+  key: string;
+  name: string;
+  run: (page: Page) => Promise<Violation[]>;
+}
+
+const MODULES: AuditModule[] = [
+  {
+    key: 'typography',
+    name: 'Typography',
+    run: async (p) => checkTypography(await extractTypography(p)),
+  },
+  {
+    key: 'spacing',
+    name: 'Vertical Rhythm & Spacing',
+    run: async (p) => checkRhythm(await extractRhythm(p)),
+  },
+  {
+    key: 'colors',
+    name: 'Colors',
+    run: async (p) => checkColors(await extractColors(p)),
+  },
+  {
+    key: 'components',
+    name: 'Components',
+    run: async (p) => checkComponents(await extractComponents(p)),
+  },
+  {
+    key: 'reading-width',
+    name: 'Reading Width',
+    run: async (p) => checkReadingWidth(await extractReadingWidth(p)),
+  },
+  {
+    key: 'images',
+    name: 'Images',
+    run: async (p) => checkImages(await extractImages(p)),
+  },
+  {
+    key: 'links',
+    name: 'Links',
+    run: async (p) => checkLinks(await extractLinks(p)),
+  },
+  {
+    key: 'breakpoints',
+    name: 'Breakpoints',
+    run: async (p) => checkBreakpoints(await extractBreakpoints(p)),
+  },
+  {
+    key: 'headings',
+    name: 'Headings',
+    run: async (p) => checkHeadings(await extractHeadings(p)),
+  },
+];
+
+function resolveModules(only?: string): AuditModule[] {
+  if (!only) return MODULES;
+
+  const keys = only.split(',').map((k) => k.trim().toLowerCase());
+  const unknown = keys.filter((k) => !MODULES.some((m) => m.key === k));
+  if (unknown.length > 0) {
+    console.error(
+      `Unknown module(s): ${unknown.join(', ')}\n` +
+        `Valid modules: ${MODULES.map((m) => m.key).join(', ')}`
+    );
+    process.exit(1);
+  }
+
+  return MODULES.filter((m) => keys.includes(m.key));
+}
 
 const program = new Command();
 
 program
   .name('design-auditor')
   .description('Audit design consistency of any website')
-  .version('0.1.0')
+  .version(pkg.version)
   .argument('<url>', 'URL to audit')
   .option(
     '--only <modules>',
-    'Run only specific modules: typography,colors,spacing'
+    `Run only specific modules: ${MODULES.map((m) => m.key).join(',')}`
   )
   .option('--save-report', 'Save report as JSON file')
   .option('--local', 'Optimize for local dev servers (localhost)')
   .action(async (url: string, options) => {
+    const modules = resolveModules(options.only);
     const isLocal =
       options.local || url.includes('localhost') || url.includes('127.0.0.1');
     const spinner = ora(`Analyzing ${url}`).start();
@@ -63,52 +142,13 @@ program
 
       if (isLocal) await page.waitForTimeout(1000);
 
-      spinner.text = 'Extracting typography...';
-      const typographyData = await extractTypography(page);
-
-      spinner.text = 'Extracting rhythm & spacing...';
-      const rhythmData = await extractRhythm(page);
-
-      spinner.text = 'Extracting colors...';
-      const colorsData = await extractColors(page);
-
-      spinner.text = 'Extracting components...';
-      const componentsData = await extractComponents(page);
-
-      spinner.text = 'Extracting reading width...';
-      const readingWidthData = await extractReadingWidth(page);
-
-      spinner.text = 'Extracting images...';
-      const imagesData = await extractImages(page);
-
-      spinner.text = 'Extracting links...';
-      const linksData = await extractLinks(page);
-
-      spinner.text = 'Extracting breakpoints...';
-      const breakpointsData = await extractBreakpoints(page);
-
-      spinner.text = 'Extracting headings...';
-      const headingsData = await extractHeadings(page);
+      const reports: ModuleReport[] = [];
+      for (const module of modules) {
+        spinner.text = `Extracting ${module.name.toLowerCase()}...`;
+        reports.push({ name: module.name, violations: await module.run(page) });
+      }
 
       spinner.succeed('Done');
-
-      const reports: ModuleReport[] = [
-        { name: 'Typography', violations: checkTypography(typographyData) },
-        {
-          name: 'Vertical Rhythm & Spacing',
-          violations: checkRhythm(rhythmData),
-        },
-        { name: 'Colors', violations: checkColors(colorsData) },
-        { name: 'Components', violations: checkComponents(componentsData) },
-        {
-          name: 'Reading Width',
-          violations: checkReadingWidth(readingWidthData),
-        },
-        { name: 'Images', violations: checkImages(imagesData) },
-        { name: 'Links', violations: checkLinks(linksData) },
-        { name: 'Breakpoints', violations: checkBreakpoints(breakpointsData) },
-        { name: 'Headings', violations: checkHeadings(headingsData) },
-      ];
 
       const score = calculateScore(reports);
       printHeader(url);
@@ -123,6 +163,7 @@ program
     } catch (err) {
       spinner.fail('Failed');
       console.error(err);
+      process.exitCode = 1;
     } finally {
       await browser?.close();
     }

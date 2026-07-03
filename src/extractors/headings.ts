@@ -14,6 +14,7 @@ export interface HeadingsData {
   h1Count: number;
   skippedLevels: Array<{ from: number; to: number; text: string }>; // h1 → h3
   sizeInversions: Array<{ a: HeadingEntry; b: HeadingEntry }>; // h2 larger than h1
+  sizeEqualities: Array<{ a: HeadingEntry; b: HeadingEntry }>; // h2 same size as h1
   levelSizes: Record<number, number[]>; // { 1: [48], 2: [32,32], 3: [24,24,20] }
   hasLogicalOrder: boolean;
 }
@@ -70,15 +71,21 @@ export async function extractHeadings(page: Page): Promise<HeadingsData> {
   };
 
   const sizeInversions: HeadingsData['sizeInversions'] = [];
-  const levels = Object.keys(levelSizes).map(Number).sort();
+  const sizeEqualities: HeadingsData['sizeEqualities'] = [];
+  const levels = Object.keys(levelSizes)
+    .map(Number)
+    .sort((a, b) => a - b);
   for (let i = 1; i < levels.length; i++) {
     const higher = levels[i - 1]; // e.g. 1
     const lower = levels[i]; // e.g. 2
-    if (avgSize(higher) <= avgSize(lower)) {
-      // take first element of each level for context
-      const a = headings.find((h) => h.level === higher)!;
-      const b = headings.find((h) => h.level === lower)!;
-      if (a && b) sizeInversions.push({ a, b });
+    // take first element of each level for context
+    const a = headings.find((h) => h.level === higher)!;
+    const b = headings.find((h) => h.level === lower)!;
+    if (!a || !b) continue;
+    if (avgSize(higher) < avgSize(lower)) {
+      sizeInversions.push({ a, b });
+    } else if (avgSize(higher) === avgSize(lower)) {
+      sizeEqualities.push({ a, b });
     }
   }
 
@@ -91,6 +98,7 @@ export async function extractHeadings(page: Page): Promise<HeadingsData> {
     h1Count,
     skippedLevels,
     sizeInversions,
+    sizeEqualities,
     levelSizes,
     hasLogicalOrder,
   };
