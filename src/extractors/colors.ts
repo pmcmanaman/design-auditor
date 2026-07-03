@@ -4,6 +4,7 @@ import {
   normalizeColor,
   rgbToLab,
   rgbToHex,
+  getContrast,
   isNeutral,
   isTransparent,
   isNearWhite,
@@ -53,8 +54,6 @@ export async function extractColors(page: Page): Promise<ColorsData> {
 
     const collected: RawColor[] = [];
     const elements = Array.from(document.querySelectorAll('*'));
-    let totalColorProps = 0;
-    let cssVarProps = 0;
 
     elements.forEach((el) => {
       const tag = el.tagName.toLowerCase();
@@ -74,12 +73,6 @@ export async function extractColors(page: Page): Promise<ColorsData> {
       colorProps.forEach(([prop, value]) => {
         if (!value || value === 'transparent' || value === 'rgba(0, 0, 0, 0)')
           return;
-        totalColorProps++;
-
-        // check if element uses CSS variables (via inline style or computed)
-        const inlineVal =
-          (el as HTMLElement).style?.getPropertyValue(prop) || '';
-        if (inlineVal.includes('var(')) cssVarProps++;
 
         collected.push({ css: value, property: prop, tag, fontSize, isBold });
 
@@ -90,9 +83,43 @@ export async function extractColors(page: Page): Promise<ColorsData> {
       });
     });
 
+    // CSS variable coverage — computed styles never contain var(),
+    // so scan raw declarations across all reachable stylesheets
+    let totalColorDecls = 0;
+    let cssVarDecls = 0;
+    const colorPropNames = [
+      'color',
+      'background-color',
+      'border-color',
+      'background',
+    ];
+
+    const walkRules = (ruleList: CSSRuleList) => {
+      for (const rule of Array.from(ruleList)) {
+        if (rule instanceof CSSStyleRule) {
+          for (const prop of colorPropNames) {
+            const val = rule.style.getPropertyValue(prop);
+            if (!val) continue;
+            totalColorDecls++;
+            if (val.includes('var(')) cssVarDecls++;
+          }
+        } else if ('cssRules' in rule && (rule as CSSGroupingRule).cssRules) {
+          walkRules((rule as CSSGroupingRule).cssRules);
+        }
+      }
+    };
+
+    for (const sheet of Array.from(document.styleSheets)) {
+      try {
+        walkRules(sheet.cssRules);
+      } catch {
+        // cross-origin stylesheet — skip
+      }
+    }
+
     const cssVarCoverage =
-      totalColorProps > 0
-        ? Math.round((cssVarProps / totalColorProps) * 100)
+      totalColorDecls > 0
+        ? Math.round((cssVarDecls / totalColorDecls) * 100)
         : 0;
 
     return { collected, cssVarCoverage };
@@ -145,7 +172,6 @@ export async function extractColors(page: Page): Promise<ColorsData> {
   // ─── Contrast pairs (WCAG) ────────────────────────────────────────────────────
   const contrastPairs: ContrastPair[] = [];
   const seenPairs = new Set<string>();
-  const { getContrast } = await import('@utils/color.js');
 
   for (const item of raw.collected) {
     if (!item.bgCss) continue;

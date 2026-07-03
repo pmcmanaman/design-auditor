@@ -150,7 +150,7 @@ Use `--save-report` to track your score over time and catch design drift in CI.
 
 - Average line character count _(optimal: 45-75 characters)_
 - Percentage of text blocks within optimal reading width
-- Flags text containers that are too wide (>85 chars) or too narrow (<30 chars)
+- Flags text containers that are too wide (>80 chars) or too narrow (<30 chars)
 
 ### Images `weight: 10%`
 
@@ -368,6 +368,7 @@ See [open issues](https://github.com/PashaSchool/design-auditor/issues) for idea
 - JavaScript-heavy SPAs may need a few seconds to fully render — use `--local` for dev servers
 - Media query analysis reads CSS source rules; dynamically injected media queries may be missed
 - Color extraction uses computed styles — colors set via `canvas`, `svg`, or `background-image` gradients are not captured
+- Contrast checking covers text on elements with an explicit background color; text over inherited/transparent backgrounds or images is skipped
 
 ---
 

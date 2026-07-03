@@ -20,8 +20,10 @@ export interface ReadingWidthData {
 // For most sans-serif fonts ≈ 0.48–0.52
 const CHAR_WIDTH_RATIO = 0.5;
 
-// Text tags where readability matters
-const TEXT_TAGS = ['p', 'article', 'section', 'main', 'li', 'blockquote', 'td'];
+// Text tags where readability matters.
+// Layout containers (article, section, main) are excluded —
+// their width is the layout width, not the text line width.
+const TEXT_TAGS = ['p', 'li', 'blockquote', 'td'];
 
 export async function extractReadingWidth(
   page: Page
