@@ -1,6 +1,11 @@
 # Changelog
 
-## [1.0.6] - 2026-07-03
+## [1.1.0] - 2026-07-03
+
+### Changed
+
+- **Requires Node.js 20+** (was 18+). Node 18 reached end-of-life in April 2025 and current dev tooling no longer supports it
+- Bumped dev dependencies (vite/vitest) to fix `npm audit` findings
 
 ### Fixed
 

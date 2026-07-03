@@ -342,7 +342,7 @@ npm install -g design-auditor
 design-auditor https://stripe.com
 ```
 
-**Requirements:** Node.js 18+
+**Requirements:** Node.js 20+
 
 ---
 
