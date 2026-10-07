@@ -62,7 +62,7 @@ export async function interactiveLogin(
       cleanup();
     }
 
-    return await saveStorageState(context, opts.outputPath);
+    return await saveStorageState(context, opts.outputPath, page);
   } finally {
     await browser?.close().catch(() => {});
   }

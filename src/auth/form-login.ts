@@ -110,7 +110,7 @@ export async function formLoginToStorageState(
     });
     const page = await context.newPage();
     await performFormLogin(page, auth);
-    return await saveStorageState(context, outputPath);
+    return await saveStorageState(context, outputPath, page);
   } finally {
     await browser.close();
   }

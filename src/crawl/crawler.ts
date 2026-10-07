@@ -69,6 +69,8 @@ export interface SkippedLink {
 
 export interface CrawlOptions<T> {
   startUrl: string;
+  // additional same-origin entry points (paths or URLs), crawled at depth 0
+  seeds?: string[];
   maxPages: number;
   maxDepth: number;
   include?: string[];
@@ -101,6 +103,12 @@ export async function crawl<T>(opts: CrawlOptions<T>): Promise<CrawlResult<T>> {
   const queue: Array<{ url: string; depth: number; referrer: string | null }> =
     [{ url: start, depth: 0, referrer: null }];
   const seen = new Set<string>([start]); // queued or visited request URLs
+  for (const seed of opts.seeds ?? []) {
+    const url = normalizeUrl(seed, start);
+    if (!url || seen.has(url) || !isSameOrigin(url, start)) continue;
+    seen.add(url);
+    queue.push({ url, depth: 0, referrer: null });
+  }
   const loaded = new Set<string>(); // final (post-redirect) URLs already loaded
   const skippedSeen = new Set<string>();
   const pages: CrawledPage<T>[] = [];

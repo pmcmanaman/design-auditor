@@ -40,6 +40,8 @@ export interface CrawlConfig {
   maxDepth?: number;
   include?: string[];
   exclude?: string[];
+  // extra entry points (paths or same-origin URLs) for routes not linked via <a href>
+  seeds?: string[];
 }
 
 export interface AuditorConfig {
@@ -77,7 +79,7 @@ export function validateConfig(raw: unknown, source = 'config'): AuditorConfig {
         );
       }
     }
-    for (const key of ['include', 'exclude'] as const) {
+    for (const key of ['include', 'exclude', 'seeds'] as const) {
       if (
         c[key] !== undefined &&
         !(Array.isArray(c[key]) && c[key]!.every((p) => typeof p === 'string'))

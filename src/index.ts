@@ -116,6 +116,12 @@ program
     collect,
     []
   )
+  .option(
+    '--seed <path>',
+    'Extra page to start crawling from, for routes not linked with <a href> (repeatable, comma-separated)',
+    collect,
+    []
+  )
   .option('--format <format>', 'Output format: terminal or json', 'terminal')
   .option(
     '--output <file>',
@@ -163,6 +169,7 @@ program
           ? options.include
           : (crawlCfg.include ?? []),
         exclude: [...(crawlCfg.exclude ?? []), ...options.exclude],
+        seeds: [...(crawlCfg.seeds ?? []), ...options.seed],
       };
       if (options.storageState && isFormAuth(config.auth)) {
         throw new ConfigError(

@@ -1,11 +1,14 @@
-import { Browser, BrowserContext, chromium } from 'playwright';
+import { Browser, Page, chromium } from 'playwright';
 import { ModuleReport } from '@/types.js';
 import { AuditModule } from '@/audit/modules.js';
 import { auditPage } from '@/audit/audit-page.js';
 import { gotoSettled } from '@/browser/navigate.js';
 import { AuthConfig, isFormAuth } from '@/config.js';
 import { AuthError, NavigationError } from '@/errors.js';
-import { loadStorageState } from '@/auth/storage-state.js';
+import {
+  loadStorageState,
+  restoreSessionStorage,
+} from '@/auth/storage-state.js';
 import { performFormLogin } from '@/auth/form-login.js';
 import {
   INVALID_AUTH_MESSAGE,
@@ -34,6 +37,8 @@ import { AuditScore, calculateScore } from '@utils/score.js';
 
 export interface CrawlSettings {
   enabled: boolean;
+  // extra entry points for routes not reachable through <a href> links
+  seeds: string[];
   maxPages: number;
   maxDepth: number;
   include: string[];
@@ -92,11 +97,12 @@ export async function runAudit(opts: RunOptions): Promise<RunResult> {
   const storageStatePath = opts.storageStatePath ?? auth?.storageState;
   const authConfigured = !!storageStatePath || isFormAuth(auth);
 
-  if (storageStatePath) {
-    const summary = loadStorageState(storageStatePath);
-    if (summary.cookies > 0 && summary.expiredCookies === summary.cookies) {
+  const state = storageStatePath ? loadStorageState(storageStatePath) : null;
+  if (state) {
+    const { cookies, expiredCookies } = state.summary;
+    if (cookies > 0 && expiredCookies === cookies) {
       warn(
-        `All ${summary.cookies} cookies in the storage state have expired; the session is probably no longer valid.`
+        `All ${cookies} cookies in the storage state have expired; the session is probably no longer valid.`
       );
     }
   }
@@ -110,22 +116,21 @@ export async function runAudit(opts: RunOptions): Promise<RunResult> {
     browser = await chromium.launch();
     const context = await browser.newContext({
       ignoreHTTPSErrors: opts.isLocal,
-      storageState: storageStatePath,
+      storageState: state?.playwright,
     });
+    if (state) await restoreSessionStorage(context, state.sessionStorage);
 
+    // One tab for the whole run: sessionStorage is per tab, and SPAs often
+    // keep their session there, so a fresh tab per page would log us out
+    const page = await context.newPage();
     if (isFormAuth(auth)) {
       progress('Logging in...');
-      const loginPage = await context.newPage();
-      try {
-        await performFormLogin(loginPage, auth);
-      } finally {
-        await loginPage.close();
-      }
+      await performFormLogin(page, auth);
     }
 
     const aggregator = new DesignAggregator();
     const visit = (url: string, ctx: VisitContext) =>
-      visitPage(context, url, ctx, {
+      visitPage(page, url, ctx, {
         ...opts,
         authConfigured,
         aggregator,
@@ -135,6 +140,7 @@ export async function runAudit(opts: RunOptions): Promise<RunResult> {
 
     const result = await crawl<PageAudit>({
       startUrl: opts.url,
+      seeds: crawlSettings.enabled ? crawlSettings.seeds : [],
       maxPages,
       maxDepth,
       include: crawlSettings.include,
@@ -196,94 +202,89 @@ interface VisitDeps extends RunOptions {
 }
 
 async function visitPage(
-  context: BrowserContext,
+  page: Page,
   url: string,
   ctx: VisitContext,
   deps: VisitDeps
 ): Promise<VisitResult<PageAudit>> {
-  const page = await context.newPage();
   const base = { links: [], title: '' };
+  let response;
   try {
-    let response;
-    try {
-      response = await gotoSettled(page, url, { isLocal: deps.isLocal });
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message.split('\n')[0] : String(err);
-      return {
-        ...base,
-        finalUrl: url,
-        status: null,
-        outcome: 'nav-failed',
-        error: redactSecrets(message),
-      };
+    response = await gotoSettled(page, url, { isLocal: deps.isLocal });
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message.split('\n')[0] : String(err);
+    return {
+      ...base,
+      finalUrl: url,
+      status: null,
+      outcome: 'nav-failed',
+      error: redactSecrets(message),
+    };
+  }
+
+  const finalUrl = page.url();
+  const status = response?.status() ?? null;
+  const title = await page.title().catch(() => '');
+  const result = { ...base, finalUrl, status, title };
+
+  // Same-origin links that redirect elsewhere (docs, status page) are not
+  // auth failures — unless they land on a login page
+  if (
+    ctx.depth > 0 &&
+    !isSameOrigin(finalUrl, url) &&
+    !isLoginLikeUrl(finalUrl)
+  ) {
+    return { ...result, outcome: 'off-origin' };
+  }
+
+  const authProblem = await checkPageAuth(page, url, response, {
+    loginUrl: deps.auth?.loginUrl,
+    verifySelector: deps.auth?.verify?.selector,
+  });
+  if (authProblem) {
+    if (deps.authConfigured) {
+      return { ...result, outcome: 'auth-failed', error: authProblem };
     }
-
-    const finalUrl = page.url();
-    const status = response?.status() ?? null;
-    const title = await page.title().catch(() => '');
-    const result = { ...base, finalUrl, status, title };
-
-    // Same-origin links that redirect elsewhere (docs, status page) are not
-    // auth failures — unless they land on a login page
-    if (
-      ctx.depth > 0 &&
-      !isSameOrigin(finalUrl, url) &&
-      !isLoginLikeUrl(finalUrl)
-    ) {
-      return { ...result, outcome: 'off-origin' };
+    if (ctx.depth === 0) {
+      deps.warn(
+        `${pathOf(url)}: ${authProblem}. If this page requires login, pass --storage-state or --config.`
+      );
     }
+  }
 
-    const authProblem = await checkPageAuth(page, url, response, {
-      loginUrl: deps.auth?.loginUrl,
-      verifySelector: deps.auth?.verify?.selector,
-    });
-    if (authProblem) {
-      if (deps.authConfigured) {
-        return { ...result, outcome: 'auth-failed', error: authProblem };
-      }
-      if (ctx.depth === 0) {
-        deps.warn(
-          `${pathOf(url)}: ${authProblem}. If this page requires login, pass --storage-state or --config.`
-        );
-      }
-    }
+  if (status !== null && status >= 400) {
+    return { ...result, outcome: 'nav-failed', error: `HTTP ${status}` };
+  }
 
-    if (status !== null && status >= 400) {
-      return { ...result, outcome: 'nav-failed', error: `HTTP ${status}` };
-    }
-
-    const links = ctx.collectLinks ? await extractLinks(page) : [];
-    const skipOutcome = ctx.shouldAudit(finalUrl);
-    if (skipOutcome) {
-      return {
-        ...result,
-        outcome: skipOutcome,
-        links: skipOutcome === 'discovery-only' ? links : [],
-      };
-    }
-
-    const reports = await auditPage(page, deps.modules, (module) =>
-      deps.progress(`${pathOf(finalUrl)} — ${module.name.toLowerCase()}`)
-    );
-    deps.progress(`${pathOf(finalUrl)} — collecting design values`);
-    const snapshot = await extractDesignSamples(page);
-    deps.aggregator.add(snapshot);
-
+  const links = ctx.collectLinks ? await extractLinks(page) : [];
+  const skipOutcome = ctx.shouldAudit(finalUrl);
+  if (skipOutcome) {
     return {
       ...result,
-      outcome: 'audited',
-      links,
-      data: {
-        reports,
-        score: calculateScore(reports),
-        elementCount: snapshot.elementCount,
-        truncated: snapshot.truncated,
-      },
+      outcome: skipOutcome,
+      links: skipOutcome === 'discovery-only' ? links : [],
     };
-  } finally {
-    await page.close().catch(() => {});
   }
+
+  const reports = await auditPage(page, deps.modules, (module) =>
+    deps.progress(`${pathOf(finalUrl)} — ${module.name.toLowerCase()}`)
+  );
+  deps.progress(`${pathOf(finalUrl)} — collecting design values`);
+  const snapshot = await extractDesignSamples(page);
+  deps.aggregator.add(snapshot);
+
+  return {
+    ...result,
+    outcome: 'audited',
+    links,
+    data: {
+      reports,
+      score: calculateScore(reports),
+      elementCount: snapshot.elementCount,
+      truncated: snapshot.truncated,
+    },
+  };
 }
 
 function toPageResult(p: CrawledPage<PageAudit>): PageResult {
