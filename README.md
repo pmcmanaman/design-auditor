@@ -334,6 +334,7 @@ The crawler is deliberately conservative:
 - URLs are normalized (fragments, trailing slashes, default ports and query order) and deduplicated, including redirect targets.
 - It skips `mailto:`, `tel:`, `javascript:` and `data:` links, `download` links, and files (`.pdf`, `.csv`, images, archives…).
 - It skips links whose URL, text, `aria-label` or `title` suggest a state change: **logout / sign out, delete, remove, destroy, unsubscribe, cancel account, terminate, revoke, deactivate**.
+- It skips links to routes that may act just by loading, such as creating a draft, starting an AI job, or beginning an OAuth/connect flow. These are any path segment equal to `new`, `add`, `create`, `draft`, `wizard`, `authorize` or `oauth`, or starting with `generate`. Only whole segments count, so `/drafts` and `/news` are crawled. Seeds and the start URL you pass yourself still run.
 - `--max-pages` (default **100**) and `--max-depth` (default **10**) bound the crawl and break infinite pagination.
 - If several consecutive pages fail authentication mid-crawl, it stops, reports what it has, and exits with code 2.
 

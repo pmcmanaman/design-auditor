@@ -117,6 +117,32 @@ describe('crawl', () => {
     expect(result.skipped.filter((s) => s.reason === 'unsafe')).toHaveLength(5);
   });
 
+  it('does not follow action routes but still runs them when seeded', async () => {
+    const { visited, result } = await run(
+      {
+        '/': {
+          links: [
+            '/items/new',
+            '/kb/1/generate-knowledge',
+            '/oauth/authorize',
+            '/items/drafts',
+            { href: '/items', text: 'Add item' },
+          ],
+        },
+        '/items/drafts': {},
+        '/items': {},
+        '/wizard/new': {},
+      },
+      { seeds: ['/wizard/new'] }
+    );
+    expect(visited).toEqual(['/', '/wizard/new', '/items/drafts', '/items']);
+    expect(
+      result.skipped
+        .filter((s) => s.reason === 'action-route')
+        .map((s) => s.url.replace(ORIGIN, ''))
+    ).toEqual(['/items/new', '/kb/1/generate-knowledge', '/oauth/authorize']);
+  });
+
   it('skips blocked schemes, downloads and files', async () => {
     const { visited, result } = await run({
       '/': {

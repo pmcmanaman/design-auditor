@@ -98,7 +98,9 @@ const PAGES: Record<string, () => string> = {
     layout(
       'Settings',
       `<h1>Settings</h1>${cards('Preference', 5)}
-      <a href="/settings/danger/revoke-tokens">Revoke all tokens</a>`
+      <a href="/settings/danger/revoke-tokens">Revoke all tokens</a>
+      <a href="/settings/autopilot/new">Set up autopilot</a>
+      <a href="/settings/library/7/generate-knowledge">Build knowledge</a>`
     ),
   '/settings/profile': () =>
     layout(

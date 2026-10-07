@@ -78,6 +78,33 @@ export function looksDestructive(text: string | undefined | null): boolean {
   return UNSAFE.test(decoded);
 }
 
+// Routes that may act just by loading: create a draft record on mount, start
+// an AI generation job, or begin an OAuth/connect flow. Matched against whole
+// path segments only, so "/drafts" or a link labeled "Add" are unaffected.
+const ACTION_SEGMENT =
+  /^(?:new|add|create|draft|wizard|authorize|oauth2?|generate(?:-[a-z0-9-]+)?)$/i;
+
+export function isActionRoute(url: string): boolean {
+  let pathname: string;
+  try {
+    pathname = new URL(url).pathname;
+  } catch {
+    return false;
+  }
+  return pathname
+    .split('/')
+    .filter(Boolean)
+    .some((segment) => {
+      let decoded = segment;
+      try {
+        decoded = decodeURIComponent(segment);
+      } catch {
+        // keep the raw segment
+      }
+      return ACTION_SEGMENT.test(decoded);
+    });
+}
+
 const BLOCKED_SCHEMES = /^\s*(mailto|tel|sms|javascript|data|blob|file|ftp):/i;
 
 export function hasBlockedScheme(href: string): boolean {

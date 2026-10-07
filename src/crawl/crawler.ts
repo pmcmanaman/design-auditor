@@ -1,5 +1,6 @@
 import {
   hasBlockedScheme,
+  isActionRoute,
   isAllowedByPatterns,
   isNonHtmlResource,
   isSameOrigin,
@@ -52,6 +53,7 @@ export interface CrawledPage<T> extends VisitResult<T> {
 
 export type SkipReason =
   | 'unsafe'
+  | 'action-route'
   | 'off-origin'
   | 'blocked-scheme'
   | 'download'
@@ -193,6 +195,11 @@ export async function crawl<T>(opts: CrawlOptions<T>): Promise<CrawlResult<T>> {
         looksDestructive(link.title)
       ) {
         skip(url, 'unsafe', item.url);
+        continue;
+      }
+      // seeds and the start URL are explicit and still run; discovered links don't
+      if (isActionRoute(url)) {
+        skip(url, 'action-route', item.url);
         continue;
       }
       if (!isAllowedByPatterns(url, include, exclude)) {

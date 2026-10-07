@@ -3,6 +3,7 @@ import {
   normalizeUrl,
   isSameOrigin,
   looksDestructive,
+  isActionRoute,
   hasBlockedScheme,
   isNonHtmlResource,
   globToRegExp,
@@ -164,5 +165,34 @@ describe('include / exclude globs', () => {
     expect(
       isAllowedByPatterns('https://app.test/x/y', ['https://app.test/x/**'])
     ).toBe(true);
+  });
+});
+
+describe('isActionRoute', () => {
+  it.each([
+    '/settings/autopilot-ai/new',
+    '/settings/knowledge-library/add',
+    '/projects/create',
+    '/settings/knowledge-library/42/draft',
+    '/settings/woo-voice-scripts/generate',
+    '/settings/knowledge-library/42/generate-knowledge',
+    '/settings/integration/app-connections/hubspot/authorize',
+    '/settings/integration/app-connections/hubspot/wizard',
+    '/connect/oauth2/start',
+    '/items/NEW',
+  ])('flags %s', (path) => {
+    expect(isActionRoute(`https://app.test${path}`)).toBe(true);
+  });
+
+  it.each([
+    '/settings/drafts',
+    '/news',
+    '/addresses',
+    '/generated-reports',
+    '/settings/integration/app-connections/hubspot',
+    '/knowledge-library/new-arrivals-guide',
+    '/settings/user?new=1',
+  ])('allows %s', (path) => {
+    expect(isActionRoute(`https://app.test${path}`)).toBe(false);
   });
 });

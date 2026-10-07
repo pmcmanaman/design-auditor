@@ -137,11 +137,12 @@ describe.skipIf(!hasChromium)('authenticated crawl against fixture app', () => {
     expect(run.pages.some((p) => p.outcome === 'auth-failed')).toBe(false);
 
     const forbidden =
-      /\/logout|\/delete|\/account\/close|\/revoke|\/export\.pdf|^GET \/report/;
+      /\/logout|\/delete|\/account\/close|\/revoke|\/export\.pdf|^GET \/report|\/new\b|\/generate-knowledge/;
     expect(server.hits.filter((h) => forbidden.test(h))).toEqual([]);
     expect(run.skipped.map((s) => s.reason)).toEqual(
       expect.arrayContaining([
         'unsafe',
+        'action-route',
         'blocked-scheme',
         'off-origin',
         'non-html',
