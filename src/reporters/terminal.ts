@@ -194,3 +194,177 @@ export function printScore(auditScore: AuditScore) {
   thick();
   console.log();
 }
+
+// ─── Multi-page (crawl) output ────────────────────────────────────────────────
+
+export interface PageSummaryInput {
+  path: string;
+  title: string;
+  outcome: string;
+  error?: string;
+  score?: AuditScore;
+  reports?: ModuleReport[];
+}
+
+export function printCrawlSummary(stats: {
+  visited: number;
+  audited: number;
+  skippedLinks: number;
+  failed: number;
+  unvisited: number;
+  aborted?: string;
+}) {
+  console.log(chalk.bold.white('  CRAWL'));
+  console.log();
+  console.log(
+    `  ${chalk.bold(String(stats.audited))} pages audited  ${chalk.dim('·')}  ` +
+      `${stats.visited} visited  ${chalk.dim('·')}  ` +
+      `${stats.failed > 0 ? chalk.red(`${stats.failed} failed`) : chalk.dim('0 failed')}  ${chalk.dim('·')}  ` +
+      chalk.dim(`${stats.skippedLinks} links skipped`)
+  );
+  if (stats.unvisited > 0) {
+    console.log(
+      chalk.yellow(
+        `  Page limit reached: ${stats.unvisited} discovered pages were not visited (raise --max-pages)`
+      )
+    );
+  }
+  if (stats.aborted) console.log(chalk.red(`  ${stats.aborted}`));
+  console.log();
+}
+
+export function printPageFindings(page: PageSummaryInput, verbose = false) {
+  const right = page.score
+    ? scoreColor(page.score.overall)(String(page.score.overall).padStart(3))
+    : chalk.dim(page.outcome);
+  const title = page.title ? chalk.dim(`  ${page.title.slice(0, 40)}`) : '';
+  console.log(`${chalk.bold.white(page.path)}${title}  ${right}`);
+
+  if (page.error) console.log(`    ${chalk.red(page.error)}`);
+
+  if (page.reports && page.score) {
+    if (verbose) {
+      console.log();
+      printReport(page.reports, page.score);
+    } else {
+      for (const report of page.reports) {
+        const issues = report.violations.filter((v) => v.severity !== 'pass');
+        if (issues.length === 0) continue;
+        console.log(chalk.dim(`  ${report.name}`));
+        [
+          ...issues.filter((v) => v.severity === 'error'),
+          ...issues.filter((v) => v.severity === 'warn'),
+        ].forEach(printViolation);
+      }
+    }
+  }
+  console.log();
+}
+
+export interface ConsistencyFinding {
+  category: string;
+  confidence: 'high' | 'medium' | 'info';
+  property: string;
+  value: string;
+  count: number;
+  pages: string[];
+  examples: { url: string; selector: string; text?: string }[];
+  dominant?: { value: string; count: number };
+  groupLabel?: string;
+  reason: string;
+  suggestion: string;
+}
+
+const CATEGORY_ORDER = ['typography', 'spacing', 'colors', 'components'];
+const CONFIDENCE_STYLE = {
+  high: chalk.bold.red('HIGH  '),
+  medium: chalk.yellow('MEDIUM'),
+  info: chalk.dim('INFO  '),
+};
+
+export function printConsistency(
+  findings: ConsistencyFinding[],
+  opts: {
+    maxPerCategory: number;
+    includeInfo: boolean;
+    toPath: (url: string) => string;
+  }
+) {
+  thick();
+  console.log(chalk.bold.white('  APPLICATION-WIDE DESIGN CONSISTENCY'));
+  thick();
+  console.log();
+
+  const shown = findings.filter(
+    (f) => opts.includeInfo || f.confidence !== 'info'
+  );
+  if (shown.length === 0) {
+    console.log(
+      `  ${ICON.pass}  ${chalk.dim('No probable inconsistencies found across audited pages')}`
+    );
+    console.log();
+    return;
+  }
+
+  for (const category of CATEGORY_ORDER) {
+    const list = shown.filter((f) => f.category === category);
+    if (list.length === 0) continue;
+
+    moduleHeader(category[0].toUpperCase() + category.slice(1));
+    console.log();
+    for (const f of list.slice(0, opts.maxPerCategory)) {
+      const where =
+        f.pages.length === 1
+          ? opts.toPath(f.pages[0])
+          : `${f.pages.length} pages`;
+      console.log(`  ${CONFIDENCE_STYLE[f.confidence]}  ${chalk.white(where)}`);
+      if (f.groupLabel) console.log(`    ${chalk.dim(f.groupLabel)}`);
+      console.log(
+        `    ${colorizeHexes(`${f.property}: ${f.value}`)}  ${chalk.dim(`(${f.count}×)`)}`
+      );
+      if (f.dominant) {
+        console.log(
+          `    ${chalk.dim('Comparable:')} ${colorizeHexes(f.dominant.value)}  ${chalk.dim(`(${f.dominant.count}×)`)}`
+        );
+      }
+      for (const ex of f.examples.slice(0, 3)) {
+        const text = ex.text ? chalk.dim(` "${ex.text}"`) : '';
+        const page =
+          f.pages.length > 1 ? chalk.dim(`${opts.toPath(ex.url)}  `) : '';
+        console.log(
+          `    ${chalk.dim('→')} ${page}${chalk.cyan(ex.selector)}${text}`
+        );
+      }
+      console.log(`    ${chalk.dim(colorizeHexes(f.reason))}`);
+      console.log(`    ${chalk.dim(f.suggestion)}`);
+      console.log();
+    }
+    if (list.length > opts.maxPerCategory) {
+      console.log(
+        chalk.dim(
+          `  … ${list.length - opts.maxPerCategory} more ${category} findings (raise --max-findings or use --format json)`
+        )
+      );
+      console.log();
+    }
+  }
+
+  const high = shown.filter((f) => f.confidence === 'high').length;
+  const medium = shown.filter((f) => f.confidence === 'medium').length;
+  thick();
+  console.log(
+    `  ${high > 0 ? chalk.bold.red(`${high} high`) : chalk.dim('0 high')}` +
+      `  ${medium > 0 ? chalk.yellow(`${medium} medium`) : chalk.dim('0 medium')}` +
+      chalk.dim(`  confidence findings`)
+  );
+  thick();
+}
+
+export function printAppScore(average: number, pages: number) {
+  console.log();
+  console.log(
+    `  ${chalk.bold('Average page score')}  ${scoreColor(average).bold(String(average))}${chalk.dim('/100')}` +
+      chalk.dim(`  across ${pages} pages`)
+  );
+  console.log();
+}
