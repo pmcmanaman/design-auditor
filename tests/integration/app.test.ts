@@ -341,6 +341,40 @@ describe.skipIf(!hasChromium)('authenticated crawl against fixture app', () => {
       expect(report.globalAnalysis.outliers.length).toBeGreaterThan(0);
     }, 120_000);
 
+    it('renders a saved JSON report as HTML with the report command', async () => {
+      // audit.json comes from the previous test
+      const r = await cli(['report', 'audit.json']);
+      expect(r.status).toBe(0);
+      const html = readFileSync(path.join(dir, 'audit.html'), 'utf-8');
+      expect(html).toContain('Consistency findings');
+      expect(html).toContain('/settings/billing');
+
+      writeFileSync(path.join(dir, 'not-a-report.json'), '{"hello":1}');
+      const bad = await cli(['report', 'not-a-report.json']);
+      expect(bad.status).toBe(1);
+      expect(bad.stderr).toMatch(
+        /does not look like a design-auditor JSON report/
+      );
+    }, 120_000);
+
+    it('writes an HTML report directly with --format html', async () => {
+      const r = await cli([
+        `${server.url}/dashboard`,
+        '--storage-state',
+        statePath,
+        '--only',
+        'typography',
+        '--format',
+        'html',
+        '--output',
+        'direct.html',
+      ]);
+      expect(r.status).toBe(0);
+      expect(readFileSync(path.join(dir, 'direct.html'), 'utf-8')).toMatch(
+        /^<!doctype html>/
+      );
+    }, 120_000);
+
     it('prints JSON to stdout and nothing else there', async () => {
       const r = await cli([
         `${server.url}/dashboard`,

@@ -9,8 +9,13 @@
 - **Form login for CI** via `--config` (JSON). Credentials come only from environment variables, with optional two-step `next` and `success` / `verify` conditions
 - **Crawling**: `--crawl`, `--max-pages` (100), `--max-depth` (10), `--include`/`--exclude` globs and `--seed` entry points. Same-origin GET navigations only; logout/delete/revoke-style links, downloads, files and non-http schemes are skipped
 - **Application-wide design consistency**: cross-page distributions for typography, spacing, colors and components, with high/medium/info outliers. Covers near-miss scale values, off-grid spacing, near-duplicate colors, browser-default fonts and deviations within semantic groups (headings, button variants, inputs, cards, nav items), each reported with selectors
-- `--format json`, `--output <file>`, `--fail-on high|medium`, `--max-findings`, `--verbose`
+- `--format json|html`, `--output <file>`, `--fail-on high|medium`, `--max-findings`, `--verbose`
+- **HTML report**: self-contained, offline page with filterable findings, recurring issues, per-page reports and design-value charts. `design-auditor report <json>` renders an existing JSON report
 - Exit codes: 2 auth failure, 3 navigation failure, 4 `--fail-on` threshold
+
+### Fixed
+
+- Breakpoints: Media Queries 4 range syntax (`(width>=48rem)`, `(48rem <= width)`, `not all and (…)`) is recognized. Tailwind v4 sites were reported as having no media queries
 
 ### Changed
 

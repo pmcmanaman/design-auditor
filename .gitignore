@@ -11,3 +11,6 @@ design-audit-*.json
 # authentication state (session credentials) — never commit
 .design-auditor/
 auth.json
+
+# generated HTML reports
+design-audit-*.html

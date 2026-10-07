@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { Command, InvalidArgumentError } from 'commander';
@@ -19,6 +19,7 @@ import {
   saveReport,
   writeReport,
 } from '@reporters/json.js';
+import { renderHtmlReport } from '@reporters/html.js';
 import { MODULES, resolveModules } from '@/audit/modules.js';
 import { isLocalUrl } from '@/browser/navigate.js';
 import { AuditorConfig, isFormAuth, loadConfig } from '@/config.js';
@@ -69,6 +70,11 @@ function errorMessage(err: unknown): string {
   if (err instanceof AuditorError) return err.message;
   const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
   return redactSecrets(msg);
+}
+
+function defaultHtmlPath(url: string): string {
+  const host = new URL(url).hostname.replace(/\./g, '-');
+  return `design-audit-${host}-${new Date().toISOString().slice(0, 10)}.html`;
 }
 
 const program = new Command();
@@ -122,10 +128,14 @@ program
     collect,
     []
   )
-  .option('--format <format>', 'Output format: terminal or json', 'terminal')
+  .option(
+    '--format <format>',
+    'Output format: terminal, json or html',
+    'terminal'
+  )
   .option(
     '--output <file>',
-    'Write the JSON report to a file (with --format json)'
+    'Write the JSON/HTML report to a file (with --format json|html)'
   )
   .option(
     '--fail-on <confidence>',
@@ -140,8 +150,9 @@ program
   .option('--verbose', 'Print full per-page module reports when crawling')
   .action(async (url: string, options) => {
     const json = options.format === 'json';
-    if (!['terminal', 'json'].includes(options.format)) {
-      program.error(`--format must be "terminal" or "json"`);
+    const html = options.format === 'html';
+    if (!['terminal', 'json', 'html'].includes(options.format)) {
+      program.error(`--format must be "terminal", "json" or "html"`);
     }
     if (options.failOn && !['high', 'medium'].includes(options.failOn)) {
       program.error(`--fail-on must be "high" or "medium"`);
@@ -195,7 +206,11 @@ program
       const report = buildAppReport(run);
       const outliers = run.globalAnalysis.outliers;
 
-      if (json) {
+      if (html) {
+        const file = options.output ?? defaultHtmlPath(url);
+        writeFileSync(file, renderHtmlReport(report), 'utf-8');
+        console.error(`HTML report written → ${file}`);
+      } else if (json) {
         if (options.output) {
           writeReport(report, options.output);
           console.error(`Report written → ${options.output}`);
@@ -272,6 +287,40 @@ program
       }
     } catch (err) {
       spinner.fail('Failed');
+      console.error(errorMessage(err));
+      process.exitCode =
+        err instanceof AuditorError ? err.exitCode : EXIT_CODES.fatal;
+    }
+  });
+
+program
+  .command('report')
+  .description('Render a saved JSON report as a self-contained HTML page')
+  .argument('<json-file>', 'Report from --format json or --save-report')
+  .option(
+    '-o, --output <file>',
+    'HTML file to write (default: same name, .html)'
+  )
+  .action((jsonFile: string, options) => {
+    try {
+      if (!existsSync(jsonFile)) {
+        throw new ConfigError(`Report file not found: ${jsonFile}`);
+      }
+      let report;
+      try {
+        report = JSON.parse(readFileSync(jsonFile, 'utf-8'));
+      } catch {
+        throw new ConfigError(`Report file is not valid JSON: ${jsonFile}`);
+      }
+      if (!report?.url || !report?.score || !Array.isArray(report?.modules)) {
+        throw new ConfigError(
+          `${jsonFile} does not look like a design-auditor JSON report`
+        );
+      }
+      const out = options.output ?? jsonFile.replace(/\.json$/i, '') + '.html';
+      writeFileSync(out, renderHtmlReport(report), 'utf-8');
+      console.error(`HTML report written → ${out}`);
+    } catch (err) {
       console.error(errorMessage(err));
       process.exitCode =
         err instanceof AuditorError ? err.exitCode : EXIT_CODES.fatal;

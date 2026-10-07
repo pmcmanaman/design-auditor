@@ -469,6 +469,7 @@ Design findings don't fail the build unless you ask: add `--fail-on high` (or `m
 ```bash
 design-auditor <url> [options]
 design-auditor auth [login-url] [options]
+design-auditor report <json-file> [-o file.html]
 
 Arguments:
   url                       Website URL to audit
@@ -487,14 +488,30 @@ Options:
   --include <glob>          Only crawl matching paths (repeatable, comma-separated)
   --exclude <glob>          Never crawl matching paths (repeatable, comma-separated)
   --seed <path>             Extra crawl entry point (repeatable, comma-separated)
-  --format <format>         terminal (default) or json
-  --output <file>           Write the JSON report to a file (with --format json)
+  --format <format>         terminal (default), json or html
+  --output <file>           Write the JSON/HTML report to a file
   --fail-on <confidence>    Exit 4 on consistency findings: high or medium
   --max-findings <n>        Consistency findings shown per category (default 10)
   --verbose                 Print full per-page module reports when crawling
   -V, --version             Show version number
   -h, --help                Show help
 ```
+
+---
+
+## HTML Report
+
+For browsing a multi-page audit, write a single self-contained HTML file:
+
+```bash
+design-auditor https://app.example.com --crawl --storage-state .design-auditor/auth.json \
+  --format html --output audit.html
+
+# or render a JSON report you already have
+design-auditor report audit.json            # → audit.html
+```
+
+The page has filterable, searchable consistency findings with color swatches and click-to-copy selectors. It also groups recurring module issues across pages, shows per-page reports and score bars, charts the design values in use, and lists the links the crawler skipped. It works offline and makes no network requests, enforced with a Content-Security-Policy. All text from the audited site is escaped. The report can contain page text from the audited application, so share it the way you would share screenshots of that app.
 
 ---
 
