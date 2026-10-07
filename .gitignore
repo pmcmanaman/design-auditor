@@ -7,3 +7,7 @@ dist
 design-audit-*.json
 *.tgz
 
+
+# authentication state (session credentials) — never commit
+.design-auditor/
+auth.json

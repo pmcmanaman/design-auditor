@@ -1,5 +1,23 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Authenticated auditing**: `--storage-state <file>` audits pages as a signed-in user. Every page is checked for login redirects, 401/403, identity-provider hops and an optional `auth.verify.selector`. Expired sessions fail with exit code 2 instead of auditing the login screen
+- **`design-auditor auth [login-url]`**: interactive headed login that saves a Playwright storage state (0600, plus a `*` .gitignore in `.design-auditor/`). sessionStorage is saved and restored too, for SPAs that keep their session there
+- **Form login for CI** via `--config` (JSON). Credentials come only from environment variables, with optional two-step `next` and `success` / `verify` conditions
+- **Crawling**: `--crawl`, `--max-pages` (100), `--max-depth` (10), `--include`/`--exclude` globs and `--seed` entry points. Same-origin GET navigations only; logout/delete/revoke-style links, downloads, files and non-http schemes are skipped
+- **Application-wide design consistency**: cross-page distributions for typography, spacing, colors and components, with high/medium/info outliers. Covers near-miss scale values, off-grid spacing, near-duplicate colors, browser-default fonts and deviations within semantic groups (headings, button variants, inputs, cards, nav items), each reported with selectors
+- `--format json`, `--output <file>`, `--fail-on high|medium`, `--max-findings`, `--verbose`
+- Exit codes: 2 auth failure, 3 navigation failure, 4 `--fail-on` threshold
+
+### Changed
+
+- JSON reports gain `pages`, `crawl` and `globalAnalysis`. Existing top-level fields are unchanged
+- Single-page audits now exit with code 3 when the page responds with HTTP 4xx/5xx or cannot be loaded
+- The single-page audit logic moved into a reusable `auditPage(page, modules)`. Terminal output is unchanged
+
 ## [1.1.0] - 2026-07-03
 
 ### Changed

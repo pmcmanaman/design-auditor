@@ -65,6 +65,10 @@ npx design-auditor http://localhost:3000 --local
 
 # Save JSON report for CI
 npx design-auditor https://stripe.com --save-report
+
+# Signed-in app: log in once, then crawl and audit every page
+npx design-auditor auth https://app.example.com/login
+npx design-auditor https://app.example.com --crawl --storage-state .design-auditor/auth.json
 ```
 
 ---
@@ -257,22 +261,239 @@ URL  →  Playwright opens a real Chromium browser
 
 ---
 
+## Authenticated apps & crawling
+
+Most design drift lives behind a login. `design-auditor` can sign in, crawl an application, run every audit module on each page, and then compare design values **across the whole app** to find the one heading, button or color that doesn't match the rest.
+
+```
+AUTHENTICATE → CRAWL → AUDIT EACH PAGE → COLLECT DESIGN VALUES → DETECT OUTLIERS → REPORT
+```
+
+### 1. Create an authentication state (interactive)
+
+```bash
+design-auditor auth https://app.example.com/login
+```
+
+A visible Chromium window opens. Log in as you normally would (SSO, MFA and CAPTCHAs all work, because you are the one typing). Then press **Enter** in the terminal. The session is saved as a Playwright storage state:
+
+```
+✔ Authentication state saved → /path/to/project/.design-auditor/auth.json
+```
+
+Options:
+
+| Option                  | Default                     | Description                                                     |
+| ----------------------- | --------------------------- | --------------------------------------------------------------- |
+| `--output-state <path>` | `.design-auditor/auth.json` | Where to save the state                                         |
+| `--wait-for-url <text>` | —                           | Finish automatically once the URL contains this text (no Enter) |
+| `--timeout <seconds>`   | `600`                       | How long to wait for a manual login                             |
+| `--config <path>`       | —                           | Use the form login from a config file instead (see below)       |
+
+The state file holds **cookies, localStorage and sessionStorage**. Playwright's own storage state omits sessionStorage, which many single-page apps use for their session, so `design-auditor` saves it alongside and restores it before any page script runs.
+
+### 2. Audit a signed-in page
+
+```bash
+design-auditor https://app.example.com/dashboard --storage-state .design-auditor/auth.json
+```
+
+Before auditing, every page is checked for signs that the session is not valid:
+
+- a `401` / `403` response
+- a redirect (server-side or client-side) to a login-like path such as `/login`, `/signin`, `/auth` or `/sso`, or to the configured `loginUrl`
+- a redirect to another origin, such as an identity provider
+- a redirect to a page with a visible password field
+- a configured `auth.verify.selector` that is missing (useful for SPAs that render the login form without changing the URL)
+
+If the start page fails these checks, the run stops instead of silently auditing the login screen:
+
+```
+Authentication state appears invalid or expired.
+Run `design-auditor auth <login-url>` again or provide a valid --storage-state.
+Reason: redirected to login page /login
+```
+
+### 3. Crawl the application
+
+```bash
+design-auditor https://app.example.com --crawl --storage-state .design-auditor/auth.json
+
+# controlled crawl
+design-auditor https://app.example.com --crawl \
+  --max-pages 50 --max-depth 5 \
+  --include "/dashboard/**" --exclude "/admin/**" \
+  --storage-state .design-auditor/auth.json
+```
+
+The crawler is deliberately conservative:
+
+- **GET navigations only.** It never clicks buttons and never submits forms.
+- It discovers routes from rendered `<a href>` links, which includes navigation menus, sidebars and router links. Redirects are followed and recorded.
+- It stays on the start URL's **origin**.
+- URLs are normalized (fragments, trailing slashes, default ports and query order) and deduplicated, including redirect targets.
+- It skips `mailto:`, `tel:`, `javascript:` and `data:` links, `download` links, and files (`.pdf`, `.csv`, images, archives…).
+- It skips links whose URL, text, `aria-label` or `title` suggest a state change: **logout / sign out, delete, remove, destroy, unsubscribe, cancel account, terminate, revoke, deactivate**.
+- `--max-pages` (default **100**) and `--max-depth` (default **10**) bound the crawl and break infinite pagination.
+- If several consecutive pages fail authentication mid-crawl, it stops, reports what it has, and exits with code 2.
+
+Include/exclude globs match the URL path: `*` matches within one segment, `**` matches across segments, and `/admin/**` also matches `/admin` itself. Both options are repeatable and accept comma-separated lists. Exclude wins over include.
+
+If parts of your app are only reachable through buttons with click handlers rather than real links, list them as extra entry points:
+
+```bash
+design-auditor https://app.example.com --crawl --seed /campaigns --seed /contacts,/reports
+```
+
+### 4. Automated login for CI (environment variables)
+
+Credentials are **never** passed on the command line, where they would show up in process listings and shell history. Put the login steps in a JSON config file that references **environment variable names**:
+
+```json
+{
+  "auth": {
+    "type": "form",
+    "loginUrl": "https://app.example.com/login",
+    "username": {
+      "selector": "input[name=\"email\"]",
+      "env": "DESIGN_AUDITOR_USERNAME"
+    },
+    "password": {
+      "selector": "input[name=\"password\"]",
+      "env": "DESIGN_AUDITOR_PASSWORD"
+    },
+    "submit": { "selector": "button[type=\"submit\"]" },
+    "success": { "urlContains": "/dashboard" },
+    "verify": { "selector": "[data-testid=\"user-menu\"]" }
+  },
+  "crawl": {
+    "maxPages": 100,
+    "maxDepth": 10,
+    "include": [],
+    "exclude": ["/admin/**"],
+    "seeds": []
+  }
+}
+```
+
+```bash
+export DESIGN_AUDITOR_USERNAME=qa@example.com
+export DESIGN_AUDITOR_PASSWORD=...        # from your CI secret store
+design-auditor https://app.example.com --crawl --config design-auditor.config.json
+```
+
+- Selectors are [Playwright selectors](https://playwright.dev/docs/locators), so `button:has-text("Sign In")` works for forms without `name`/`id` attributes or with `type="button"` submit buttons.
+- `next` (optional) is a selector clicked between the username and password steps, for two-step logins.
+- `success` (optional) is `urlContains` and/or `selector`. Without it, the login is considered complete when the URL leaves the login page.
+- `verify.selector` (optional) must exist on every authenticated page.
+- The config refuses literal `value`s, tokens and cookies, so secrets can't end up in a committed file.
+- To log in once and reuse the session: `design-auditor auth --config design-auditor.config.json`.
+
+> Login forms protected by CAPTCHA or bot detection usually can't be automated. Use the interactive `auth` command and refresh the state file when it expires.
+
+### Application-wide design consistency
+
+During a run, every audited page also contributes computed style values (each with a CSS selector) to an application-wide analysis:
+
+| Area           | Values collected                                                                 |
+| -------------- | -------------------------------------------------------------------------------- |
+| **Typography** | font family, size, weight, line height, letter spacing                           |
+| **Spacing**    | margins, paddings, gaps, vertical and horizontal spacing                         |
+| **Colors**     | text, background and border colors, normalized to hex (incl. `oklch()`, `lab()`) |
+| **Components** | border radius, border width, box shadow, control heights                         |
+
+Elements are also grouped by role so like is compared with like: H1/H2/H3, body text, labels, links, primary/secondary/danger/icon buttons, inputs, textareas, selects, cards/panels and navigation items.
+
+Findings use three confidence levels. The thresholds favor few false positives over catching everything:
+
+| Signal                                                                                     | Example                                       |
+| ------------------------------------------------------------------------------------------ | --------------------------------------------- |
+| **Group deviation**: ≥ 90% of a group agrees (high) or ≥ 75% (medium), the deviant is rare | 66 H2s use `18px / 600`, 1 uses `15px / 500`  |
+| **Near-miss scale value**: rare and within ~1px of a token used ≥ 20× more, on ≤ 2 pages   | `font-size: 15px` ×1 next to `14px` ×235      |
+| **Off-grid spacing**: ≥ 80% of spacing is on a 4px grid and this value isn't               | `padding-top: 18px` on an `8 / 16 / 24` scale |
+| **Near-duplicate color**: ΔE ≤ 2.3 (high) or ≤ 5 (medium) from a color used ≥ 10× more     | `#3a82f6` ×1 vs `#3b82f6` ×80                 |
+| **Browser-default font** among custom fonts                                                | `Times New Roman` in an `Inter` app           |
+
+A frequently used value is treated as intentional (a "small" button variant is not a mistake), and an element explained by a group finding isn't reported again by the global checks. Terminal output shows high and medium findings (`--max-findings` per category). The JSON report includes everything, `info` included.
+
+```
+APPLICATION-WIDE DESIGN CONSISTENCY
+
+── TYPOGRAPHY ──────────────────────────────────────────────
+  HIGH    /settings/billing
+    H2 headings (67 sampled)
+    font-size / font-weight: 15px / 500  (1×)
+    Comparable: 18px / 600  (66×)
+    → [data-testid="billing-heading"] "Billing section"
+    Possible typography inconsistency — comparable h2 headings use 18px / 600.
+
+── COLORS ──────────────────────────────────────────────────
+  HIGH    /settings/profile
+    color: #3a82f6  (1×)
+    Comparable: #3b82f6  (80×)
+    → [data-testid="profile-hint"]
+    Possible accidental near-duplicate color — use the existing token.
+```
+
+### CI example
+
+```yaml
+- run: npm ci && npx playwright install --with-deps chromium
+- run: |
+    npx design-auditor https://staging.example.com \
+      --crawl --config design-auditor.config.json \
+      --format json --output audit.json
+  env:
+    DESIGN_AUDITOR_USERNAME: ${{ secrets.DESIGN_AUDITOR_USERNAME }}
+    DESIGN_AUDITOR_PASSWORD: ${{ secrets.DESIGN_AUDITOR_PASSWORD }}
+- uses: actions/upload-artifact@v4
+  with: { name: design-audit, path: audit.json }
+```
+
+Design findings don't fail the build unless you ask: add `--fail-on high` (or `medium`).
+
+### Exit codes
+
+| Code | Meaning                                                         |
+| ---- | --------------------------------------------------------------- |
+| `0`  | Audit completed                                                 |
+| `1`  | Fatal error (bad arguments, invalid config, unexpected failure) |
+| `2`  | Authentication failed, or the session expired mid-crawl         |
+| `3`  | The start page could not be loaded, or no page could be audited |
+| `4`  | `--fail-on` threshold reached                                   |
+
+---
+
 ## Options
 
 ```bash
 design-auditor <url> [options]
+design-auditor auth [login-url] [options]
 
 Arguments:
-  url                    Website URL to audit
+  url                       Website URL to audit
 
 Options:
-  --only <modules>       Run specific modules only
-                         Values: typography, colors, spacing, components,
-                         reading-width, images, links, headings, breakpoints
-  --save-report          Save full report as JSON file
-  --local                Optimize for local dev servers (disables networkidle)
-  -V, --version          Show version number
-  -h, --help             Show help
+  --only <modules>          Run specific modules only
+                            Values: typography, colors, spacing, components,
+                            reading-width, images, links, headings, breakpoints
+  --save-report             Save full report as JSON file
+  --local                   Optimize for local dev servers (disables networkidle)
+  --storage-state <path>    Playwright storage state to audit as a signed-in user
+  --config <path>           JSON config (form login via env vars, crawl settings)
+  --crawl                   Follow same-origin links and audit every page found
+  --max-pages <n>           Maximum pages to visit when crawling (default 100)
+  --max-depth <n>           Maximum link depth when crawling (default 10)
+  --include <glob>          Only crawl matching paths (repeatable, comma-separated)
+  --exclude <glob>          Never crawl matching paths (repeatable, comma-separated)
+  --seed <path>             Extra crawl entry point (repeatable, comma-separated)
+  --format <format>         terminal (default) or json
+  --output <file>           Write the JSON report to a file (with --format json)
+  --fail-on <confidence>    Exit 4 on consistency findings: high or medium
+  --max-findings <n>        Consistency findings shown per category (default 10)
+  --verbose                 Print full per-page module reports when crawling
+  -V, --version             Show version number
+  -h, --help                Show help
 ```
 
 ---
@@ -312,6 +533,72 @@ With `--save-report`, the full audit is saved as structured JSON — perfect for
   ]
 }
 ```
+
+Every report also includes `pages`, `crawl` and `globalAnalysis`. These fields are added alongside the existing ones, so consumers of the single-page format keep working. The top-level `score`/`summary`/`modules` describe the first audited page.
+
+```json
+{
+  "url": "https://app.example.com/",
+  "score": {},
+  "summary": {},
+  "modules": [],
+  "pages": [
+    {
+      "url": "https://app.example.com/settings/billing",
+      "finalUrl": "https://app.example.com/settings/billing",
+      "title": "Billing",
+      "depth": 1,
+      "referrer": "https://app.example.com/dashboard",
+      "status": 200,
+      "outcome": "audited",
+      "score": {},
+      "summary": {},
+      "modules": []
+    }
+  ],
+  "crawl": {
+    "enabled": true,
+    "maxPages": 100,
+    "maxDepth": 10,
+    "visited": 37,
+    "audited": 35,
+    "averageScore": 78,
+    "skipped": [{ "url": "https://app.example.com/logout", "reason": "unsafe" }]
+  },
+  "globalAnalysis": {
+    "pageCount": 35,
+    "typography": {
+      "fontSizes": [{ "value": "14px", "count": 1826, "pages": 35 }]
+    },
+    "spacing": { "paddings": [] },
+    "colors": { "text": [] },
+    "components": { "distributions": {}, "groups": {} },
+    "outliers": [
+      {
+        "category": "typography",
+        "confidence": "high",
+        "group": "h2",
+        "property": "font-size / font-weight",
+        "value": "15px / 500",
+        "count": 1,
+        "dominant": { "value": "18px / 600", "count": 66 },
+        "pages": ["https://app.example.com/settings/billing"],
+        "examples": [
+          {
+            "url": "https://app.example.com/settings/billing",
+            "selector": "[data-testid=\"billing-heading\"]",
+            "text": "Billing section"
+          }
+        ],
+        "reason": "H2 headings: 66 use 18px / 600, 1 uses 15px / 500",
+        "suggestion": "Possible typography inconsistency — comparable h2 headings use 18px / 600."
+      }
+    ]
+  }
+}
+```
+
+Page `outcome` is one of `audited`, `discovery-only` (start page outside `--include`), `duplicate` (redirected to an already-visited page), `off-origin`, `auth-failed` or `nav-failed`.
 
 ---
 
@@ -364,7 +651,10 @@ See [open issues](https://github.com/PashaSchool/design-auditor/issues) for idea
 
 ## Limitations
 
-- Audits only the **first page** at the given URL (no multi-page crawl yet)
+- Without `--crawl`, only the page at the given URL is audited
+- The crawler follows links only. Routes reachable solely through click handlers need `--seed`, and nothing behind modals, tabs or forms is explored
+- Semantic grouping (button variants, cards…) is heuristic, based on tags, roles, class names and backgrounds
+- Pages are crawled one at a time in a single browser tab
 - JavaScript-heavy SPAs may need a few seconds to fully render — use `--local` for dev servers
 - Media query analysis reads CSS source rules; dynamically injected media queries may be missed
 - Color extraction uses computed styles — colors set via `canvas`, `svg`, or `background-image` gradients are not captured
@@ -377,6 +667,22 @@ See [open issues](https://github.com/PashaSchool/design-auditor/issues) for idea
 [![snyk](https://snyk.io/test/github/PashaSchool/design-auditor/badge.svg)](https://snyk.io/test/github/PashaSchool/design-auditor)
 
 All dependencies are continuously scanned for vulnerabilities using **Snyk**.
+
+### Handling authentication state
+
+- **A saved storage state is a live session credential.** Anyone with `auth.json` can act as that user until the session expires. Treat it like a password.
+- **Never commit it.** `design-auditor auth` writes the file with owner-only permissions (`0600`), and when it writes into `.design-auditor/` it adds a `.gitignore` there containing `*`. Also add these to your project's `.gitignore`:
+
+  ```gitignore
+  .design-auditor/
+  auth.json
+  ```
+
+- Use a **dedicated test account** with the least privileges that can still see the pages you want audited. Prefer staging over production.
+- Credentials for automated login come **only from environment variables**. They are never accepted as CLI arguments or config values, never written to disk, and redacted from error messages.
+- Cookie, token and storage values are never printed. Errors about state files name the file, never its contents.
+- Everything runs locally. Authentication state and page content are never sent anywhere except the site being audited.
+- The crawler only follows links and skips logout/destructive-looking ones, but no heuristic is perfect. Point it at an account whose data you can afford to have viewed, and use `--exclude` for sensitive areas.
 
 ---
 
