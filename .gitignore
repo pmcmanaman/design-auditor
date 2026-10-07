@@ -14,3 +14,8 @@ auth.json
 
 # generated HTML reports
 design-audit-*.html
+
+# local audit output (contains page content from audited apps)
+audit/
+audit.html
+audit.json
