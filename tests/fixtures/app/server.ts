@@ -191,6 +191,8 @@ export async function startFixtureServer(port = 0): Promise<FixtureServer> {
       const page = SPA_PAGES[url.pathname];
       if (page) return send(res, 200, page());
     }
+    if (url.pathname === '/public/tailwind')
+      return send(res, 200, tailwindPage());
     if (url.pathname === '/login') return send(res, 200, loginPage());
     if (url.pathname === '/') {
       res.writeHead(302, { location: isAuthed(req) ? '/dashboard' : '/login' });
@@ -287,6 +289,30 @@ function spaLoginPage() {
     </script>`,
     { nav: false }
   );
+}
+
+// Patterns Tailwind v4 apps produce, which the extractors must normalize
+function tailwindPage() {
+  return `<!doctype html><html><head><title>Tailwind patterns</title><style>
+    body { font-family: Arial, sans-serif; margin: 0; }
+    .pill { border-radius: calc(infinity * 1px); padding: 4px 12px; background: #e5e7eb; }
+    .ringed { box-shadow: 0 0 #0000, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(16, 24, 40, 0.1) 0px 1px 2px 0px; padding: 16px; }
+    .ring-only { box-shadow: rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px; border: 1px solid #ddd; padding: 16px; border-radius: 8px; width: 300px; height: 100px; background: #fff; }
+    .row { display: flex; width: 777px; }
+    .push { margin-left: auto; width: 133.3px; }
+    .pale { background: #f9fafb; color: #111; padding: 8px; }
+    @media (width >= 48rem) { .wide { padding: 24px; } }
+    @media not all and (width >= 40rem) { .narrow { display: none; } }
+  </style></head><body>
+    <span class="pill" data-testid="pill">Badge</span>
+    <div class="ringed" data-testid="ringed">Shadowed</div>
+    <div class="ring-only" data-testid="ring-only">No visible shadow</div>
+    <div class="row"><span>Left</span><span class="push" data-testid="pushed">Right</span></div>
+    <button class="pale ring-primary focus:ring-primary text-primary" data-testid="pale-button">Pale</button>
+    <div role="combobox" aria-expanded="false" class="pale" data-testid="combo" tabindex="0">Select assignee</div>
+    <label data-testid="check-label"><input type="checkbox"> I agree</label>
+    <label for="f" data-testid="field-label">Name</label><input id="f">
+  </body></html>`;
 }
 
 function loginPage(error = '') {

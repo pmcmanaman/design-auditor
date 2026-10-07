@@ -50,73 +50,115 @@ function detectKnownSystem(values: number[]): string | null {
   return null;
 }
 
-export async function extractBreakpoints(page: Page): Promise<BreakpointsData> {
-  const raw = await page.evaluate(() => {
-    const bpMap = new Map<
-      string,
-      { query: string; type: string; count: number }
-    >();
+export interface WidthCondition {
+  type: 'min-width' | 'max-width';
+  value: number; // px (em/rem converted at 16px)
+}
 
-    try {
-      const sheets = Array.from(document.styleSheets);
+const NUM = '(\\d+(?:\\.\\d+)?)\\s*(px|em|rem)';
 
-      for (const sheet of sheets) {
-        let rules: CSSRuleList;
+function toPx(value: string, unit: string): number {
+  const n = parseFloat(value);
+  return unit.toLowerCase() === 'px' ? n : Math.round(n * 16);
+}
 
-        try {
-          rules = sheet.cssRules;
-        } catch {
-          continue; // cross-origin stylesheet
-        }
+// Parses width features from a media condition. Supports the legacy
+// "(min-width: 768px)" form and Media Queries 4 range syntax
+// ("(width >= 48rem)", "(48rem <= width)", "(40rem <= width < 64rem)") that
+// Tailwind v4 and modern CSS emit. A leading "not" inverts the direction
+// (Tailwind's max-* variants compile to "not all and (width >= 48rem)").
+export function parseWidthConditions(condition: string): WidthCondition[] {
+  const out: WidthCondition[] = [];
+  const legacy = new RegExp(
+    `\\(\\s*(min|max)-width\\s*:\\s*${NUM}\\s*\\)`,
+    'gi'
+  );
+  const range = new RegExp(
+    `\\(\\s*(?:${NUM}\\s*(<=|<|>=|>)\\s*)?width(?:\\s*(<=|<|>=|>)\\s*${NUM})?\\s*\\)`,
+    'gi'
+  );
 
-        const processRules = (ruleList: CSSRuleList) => {
-          for (const rule of Array.from(ruleList)) {
-            if (rule instanceof CSSMediaRule) {
-              const condition =
-                rule.conditionText || rule.media?.mediaText || '';
-
-              // capture every value, incl. combined queries like
-              // "(min-width: 768px) and (max-width: 1024px)"
-              const matches = condition.matchAll(
-                /\((min|max)-width:\s*(\d+(?:\.\d+)?)(px|em|rem)\)/gi
-              );
-              for (const match of matches) {
-                const type = `${match[1].toLowerCase()}-width`;
-                let value = parseFloat(match[2]);
-                const unit = match[3].toLowerCase();
-
-                // convert em/rem to px (approximately, based on 16px)
-                if (unit === 'em' || unit === 'rem')
-                  value = Math.round(value * 16);
-
-                const key = `${value}|${type}`;
-                if (!bpMap.has(key)) {
-                  bpMap.set(key, { query: condition, type, count: 0 });
-                }
-                bpMap.get(key)!.count++;
-              }
-            }
-
-            // recursively process nested rules (@media, @supports, @layer)
-            if ('cssRules' in rule && (rule as CSSGroupingRule).cssRules) {
-              processRules((rule as CSSGroupingRule).cssRules);
-            }
-          }
-        };
-
-        processRules(rules);
-      }
-    } catch {
-      /* ignore */
+  for (const m of condition.matchAll(legacy)) {
+    out.push({
+      type: m[1].toLowerCase() === 'min' ? 'min-width' : 'max-width',
+      value: toPx(m[2], m[3]),
+    });
+  }
+  for (const m of condition.matchAll(range)) {
+    const [, leftValue, leftUnit, leftOp, rightOp, rightValue, rightUnit] = m;
+    // "V < width": width is above V → min-width
+    if (leftValue && leftOp) {
+      out.push({
+        type: leftOp.startsWith('<') ? 'min-width' : 'max-width',
+        value: toPx(leftValue, leftUnit),
+      });
     }
+    // "width < V": width is below V → max-width
+    if (rightValue && rightOp) {
+      out.push({
+        type: rightOp.startsWith('<') ? 'max-width' : 'min-width',
+        value: toPx(rightValue, rightUnit),
+      });
+    }
+  }
 
-    return Array.from(bpMap.entries()).map(([key, data]) => ({
-      value: parseFloat(key.split('|')[0]),
-      query: data.query,
-      type: data.type,
-      count: data.count,
+  if (/^\s*not\b/i.test(condition)) {
+    return out.map((c) => ({
+      ...c,
+      type: c.type === 'min-width' ? 'max-width' : 'min-width',
     }));
+  }
+  return out;
+}
+
+export async function extractBreakpoints(page: Page): Promise<BreakpointsData> {
+  // collect raw media conditions in the browser; parse them in Node
+  const conditions = await page.evaluate(() => {
+    const found: string[] = [];
+
+    for (const sheet of Array.from(document.styleSheets)) {
+      let rules: CSSRuleList;
+      try {
+        rules = sheet.cssRules;
+      } catch {
+        continue; // cross-origin stylesheet
+      }
+
+      const processRules = (ruleList: CSSRuleList) => {
+        for (const rule of Array.from(ruleList)) {
+          if (rule instanceof CSSMediaRule) {
+            found.push(rule.conditionText || rule.media?.mediaText || '');
+          }
+          // recursively process nested rules (@media, @supports, @layer)
+          if ('cssRules' in rule && (rule as CSSGroupingRule).cssRules) {
+            processRules((rule as CSSGroupingRule).cssRules);
+          }
+        }
+      };
+      processRules(rules);
+    }
+    return found;
   });
+
+  const bpMap = new Map<
+    string,
+    { query: string; type: string; count: number }
+  >();
+  for (const condition of conditions) {
+    // capture every value, incl. combined queries like
+    // "(min-width: 768px) and (max-width: 1024px)"
+    for (const { type, value } of parseWidthConditions(condition)) {
+      const key = `${value}|${type}`;
+      if (!bpMap.has(key)) bpMap.set(key, { query: condition, type, count: 0 });
+      bpMap.get(key)!.count++;
+    }
+  }
+  const raw = Array.from(bpMap.entries()).map(([key, data]) => ({
+    value: parseFloat(key.split('|')[0]),
+    query: data.query,
+    type: data.type,
+    count: data.count,
+  }));
 
   const breakpoints: BreakpointEntry[] = raw
     .map((bp) => ({

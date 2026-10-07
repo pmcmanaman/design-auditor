@@ -213,6 +213,36 @@ export async function extractDesignSamples(
       return isNaN(n) ? 0 : Math.round(n * 100) / 100;
     };
 
+    // `rounded-full` computes to absurd lengths (e.g. 3.35544e+07px)
+    const normRadius = (r: string) => {
+      const parts = r
+        .split(/\s+/)
+        .map((t) => (parseFloat(t) >= 1000 ? 'full' : t));
+      return parts.every((t) => t === 'full') ? 'full' : parts.join(' ');
+    };
+
+    // Drop invisible layers (Tailwind emits transparent ring/shadow
+    // placeholders) so equal-looking shadows compare equal
+    const cleanShadow = (shadow: string): string | null => {
+      if (!shadow || shadow === 'none') return null;
+      const layers = shadow
+        .split(/,(?![^(]*\))/)
+        .map((l) => l.trim())
+        .filter((l) => {
+          const alpha = l.match(/rgba?\([^)]*?[,/]\s*([\d.]+)\s*\)/);
+          if (alpha && parseFloat(alpha[1]) === 0) return false;
+          if (/transparent/.test(l)) return false;
+          const nums = (l.match(/-?[\d.]+px/g) || []).map(parseFloat);
+          return nums.some((n) => n !== 0);
+        });
+      return layers.length ? layers.join(', ') : null;
+    };
+
+    // auto and percentage margins compute to large fractional values that
+    // reflect free space, not a spacing decision
+    const isLayoutMargin = (v: number) =>
+      v > 32 && Math.abs(v - Math.round(v)) > 0.01;
+
     const hasOwnText = (el: Element) => {
       for (const node of Array.from(el.childNodes)) {
         if (node.nodeType === 3 && (node.textContent || '').trim()) return true;
@@ -243,14 +273,41 @@ export async function extractDesignSamples(
       const text = (el.textContent || '').trim();
       if (!text && !(el as HTMLInputElement).value) return 'button-icon';
 
-      const cls = (
-        (el.getAttribute('class') || '') +
-        ' ' +
-        (el.getAttribute('data-variant') || '')
-      ).toLowerCase();
-      if (/danger|destructive|critical/.test(cls)) return 'button-danger';
-      if (/primary|cta/.test(cls)) return 'button-primary';
-      if (/secondary|outline|ghost|tertiary|subtle|plain|text-button/.test(cls))
+      // Whole class tokens only: utilities like `ring-primary`,
+      // `text-primary` or `hover:bg-primary` say nothing about the variant
+      const tokens = (el.getAttribute('class') || '')
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((t) => t && !t.includes(':'));
+      const variant = (el.getAttribute('data-variant') || '').toLowerCase();
+      const VARIANT = '^(?:(?:btn|button|is|variant)[-_])?';
+      const matches = (words: string, extra?: RegExp) => {
+        const re = new RegExp(`${VARIANT}(?:${words})$`);
+        return (
+          re.test(variant) ||
+          tokens.some((t) => re.test(t) || (extra ? extra.test(t) : false))
+        );
+      };
+      if (
+        matches(
+          'danger|destructive|critical',
+          /^bg-(?:red|danger|destructive)(?:-\d+)?$/
+        )
+      )
+        return 'button-danger';
+      if (
+        matches(
+          'primary|cta',
+          /^(?:bg-(?:primary|brand)(?:-\d+)?|muibutton-contained.*)$/
+        )
+      )
+        return 'button-primary';
+      if (
+        matches(
+          'secondary|outline|outlined|ghost|tertiary|subtle|plain|link',
+          /^muibutton-(?:outlined|text).*$/
+        )
+      )
         return 'button-secondary';
 
       const m = style.backgroundColor.match(/[\d.]+/g);
@@ -282,7 +339,7 @@ export async function extractDesignSamples(
       if (rect.width < 120 || rect.height < 60) return false;
       const bordered =
         px(style.borderTopWidth) > 0 && style.borderTopStyle !== 'none';
-      const shadowed = style.boxShadow && style.boxShadow !== 'none';
+      const shadowed = !!cleanShadow(style.boxShadow);
       if (!bordered && !shadowed) return false;
       if (px(style.paddingTop) < 8 && px(style.paddingLeft) < 8) return false;
       return (
@@ -302,6 +359,9 @@ export async function extractDesignSamples(
         const lvl = el.getAttribute('aria-level');
         if (lvl === '1' || lvl === '2' || lvl === '3') return 'h' + lvl;
       }
+      // custom dropdowns are selects, whatever element they are built from
+      if (role === 'combobox' || el.getAttribute('aria-haspopup') === 'listbox')
+        return 'select';
       const buttonLike = isButtonLike(el, tag);
       if (
         (tag === 'a' || buttonLike || role === 'menuitem' || role === 'tab') &&
@@ -331,7 +391,15 @@ export async function extractDesignSamples(
       }
       if (tag === 'textarea') return 'textarea';
       if (tag === 'select') return 'select';
-      if (tag === 'label') return 'label';
+      if (tag === 'label') {
+        // checkbox/radio labels are a different component from field labels
+        const control = (el as HTMLLabelElement)
+          .control as HTMLInputElement | null;
+        return control &&
+          (control.type === 'checkbox' || control.type === 'radio')
+          ? null
+          : 'label';
+      }
       if (tag === 'p') return 'body-text';
       if (isCard(el, tag, style, rect)) return 'card';
       return null;
@@ -412,12 +480,11 @@ export async function extractDesignSamples(
       borderColors.forEach((c) => record('border-color', c, el));
       borderWidths.forEach((w) => record('border-width', w, el));
 
-      if (style.borderRadius && px(style.borderRadius) > 0) {
-        record('border-radius', style.borderRadius, el);
-      }
-      if (style.boxShadow && style.boxShadow !== 'none') {
-        record('box-shadow', style.boxShadow, el);
-      }
+      const radius = normRadius(style.borderRadius || '0px');
+      if (radius === 'full' || px(radius) > 0)
+        record('border-radius', radius, el);
+      const shadow = cleanShadow(style.boxShadow);
+      if (shadow) record('box-shadow', shadow, el);
 
       // Spacing
       const mt = px(style.marginTop);
@@ -427,7 +494,7 @@ export async function extractDesignSamples(
       const vertical: number[] = [];
       const horizontal: number[] = [];
       for (const v of [mt, mb]) {
-        if (v > 0) {
+        if (v > 0 && !isLayoutMargin(v)) {
           record('margin', v + 'px', el);
           vertical.push(v);
         }
@@ -435,7 +502,7 @@ export async function extractDesignSamples(
       // symmetric large side margins are almost always `margin: 0 auto`
       if (!(ml === mr && ml > 32)) {
         for (const v of [ml, mr]) {
-          if (v > 0) {
+          if (v > 0 && !isLayoutMargin(v)) {
             record('margin', v + 'px', el);
             horizontal.push(v);
           }
@@ -504,9 +571,9 @@ export async function extractDesignSamples(
                 : px(style.letterSpacing) + 'px',
             color: normColor(style.color) || 'transparent',
             backgroundColor: bg || 'transparent',
-            borderRadius: style.borderRadius,
+            borderRadius: normRadius(style.borderRadius || '0px'),
             borderWidth: Array.from(borderWidths).join(' ') || '0px',
-            boxShadow: style.boxShadow,
+            boxShadow: cleanShadow(style.boxShadow) || 'none',
             padding: `${pt}px ${pr}px ${pb}px ${pl}px`,
             height: CONTROL_GROUPS.has(group)
               ? Math.round(rect.height)

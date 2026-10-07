@@ -115,6 +115,16 @@ describe('detectOutliers — scales', () => {
     expect(o!.examples[0].selector).toBe('.b-15px');
   });
 
+  it('formats fractional pixel differences', () => {
+    const agg = aggregate([
+      snapshot('https://a.test/1', { 'font-size': dist({ '14px': 1000 }) }),
+      snapshot('https://a.test/2', { 'font-size': dist({ '13.44px': 1 }) }),
+    ]);
+    expect(find(detectOutliers(agg), 'font-size:13.44px')?.reason).toMatch(
+      /^13\.44px is 0\.56px off 14px/
+    );
+  });
+
   it('flags off-grid spacing as medium with the detected scale', () => {
     const agg = aggregate([
       snapshot('https://a.test/1', {
@@ -199,6 +209,24 @@ describe('detectOutliers — colors', () => {
       confidence: 'high',
       dominant: { value: '#3b82f6', count: 118 },
     });
+  });
+
+  it('compares against the nearest more common color, not just the most common', () => {
+    // real-app pattern: #f2f4f7 next to #f3f4f6 (8× as common) and white (30×)
+    const agg = aggregate([
+      snapshot('https://a.test/1', {
+        'background-color': dist({
+          '#ffffff': 356,
+          '#f3f4f6': 16,
+          '#f2f4f7': 12,
+        }),
+        'border-color': dist({ '#f3f4f6': 80 }),
+        color: dist({ '#111827': 1300 }),
+      }),
+    ]);
+    const o = find(detectOutliers(agg), 'color:#f2f4f7');
+    expect(o?.dominant?.value).toBe('#f3f4f6');
+    expect(o?.confidence).toBe('medium');
   });
 
   it('ignores clearly different colors and comparably common ones', () => {

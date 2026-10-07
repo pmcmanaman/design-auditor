@@ -25,6 +25,8 @@ import { MODULES } from '@/audit/modules.js';
 import { formLoginToStorageState } from '@/auth/form-login.js';
 import { FormAuthConfig } from '@/config.js';
 import { AuthError } from '@/errors.js';
+import { extractDesignSamples } from '@extractors/design-samples.js';
+import { extractBreakpoints } from '@extractors/breakpoints.js';
 
 const hasChromium = (() => {
   try {
@@ -242,6 +244,46 @@ describe.skipIf(!hasChromium)('authenticated crawl against fixture app', () => {
         .map((p) => new URL(p.finalUrl).pathname)
     ).toEqual(['/spa/home', '/spa/reports']);
   }, 120_000);
+
+  it('normalizes Tailwind v4 patterns (radius, shadows, auto margins, variants, media)', async () => {
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage();
+      await page.goto(`${server.url}/public/tailwind`);
+      const snap = await extractDesignSamples(page);
+      const radii = Object.keys(snap.distributions['border-radius'] ?? {});
+      expect(radii).toContain('full');
+      expect(radii.some((r) => /e\+/.test(r))).toBe(false);
+
+      const shadows = Object.keys(snap.distributions['box-shadow'] ?? {});
+      expect(shadows).toEqual(['rgba(16, 24, 40, 0.1) 0px 1px 2px 0px']);
+
+      const margins = Object.keys(snap.distributions['margin'] ?? {});
+      expect(margins.filter((m) => parseFloat(m) > 32)).toEqual([]);
+
+      const groupOf = (testid: string) =>
+        Object.entries(snap.groups).find(([, samples]) =>
+          samples?.some((x) => x.selector === `[data-testid="${testid}"]`)
+        )?.[0];
+      expect(groupOf('pale-button')).toBe('button-secondary');
+      expect(groupOf('combo')).toBe('select');
+      expect(groupOf('check-label')).toBeUndefined();
+      expect(groupOf('field-label')).toBe('label');
+      // transparent ring placeholders alone do not make a card
+      expect(groupOf('ring-only')).toBe('card'); // has a real border
+      expect(groupOf('ringed')).toBeUndefined(); // no radius/background/size
+
+      const bp = await extractBreakpoints(page);
+      expect(bp.breakpoints).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ value: 768, type: 'min-width' }),
+          expect.objectContaining({ value: 640, type: 'max-width' }),
+        ])
+      );
+    } finally {
+      await browser.close();
+    }
+  }, 60_000);
 
   describe('CLI', () => {
     it('exits 2 with guidance when the storage state is invalid', async () => {

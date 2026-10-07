@@ -50,7 +50,8 @@ export const DEFAULT_THRESHOLDS = {
   // colors
   colorMinSamples: 30,
   colorRareShare: 0.01,
-  colorRatio: 10,
+  colorRatio: 10, // reference used ≥ 10× more → full confidence
+  colorMinRatio: 3, // reference must be at least this much more common
   colorDominantMinCount: 10,
   deltaEHigh: 2.3, // ~ just-noticeable difference: almost certainly accidental
   deltaEMedium: 5,
@@ -182,6 +183,10 @@ export function detectOutliers(
 
 // ─── Scale outliers ─────────────────────────────────────────────────────────
 
+function formatPx(n: number): string {
+  return String(Math.round(n * 100) / 100);
+}
+
 function pxValue(v: string): number | null {
   const m = v.match(/^(-?\d+(?:\.\d+)?)px$/);
   return m ? parseFloat(m[1]) : null;
@@ -239,7 +244,7 @@ export function detectScaleOutliers(
     let reason: string;
     if (nearHigh && ratio >= t.highRatio && fewPages) {
       confidence = 'high';
-      reason = `${v.value} is ${diff}px off ${nearest.value}, which is used ${nearest.count}× (${v.count}× vs ${nearest.count}×)`;
+      reason = `${v.value} is ${formatPx(diff)}px off ${nearest.value}, which is used ${nearest.count}× (${v.count}× vs ${nearest.count}×)`;
     } else if ((nearMedium || offGrid) && ratio >= t.mediumRatio) {
       confidence = 'medium';
       reason = offGrid
@@ -367,15 +372,25 @@ export function detectColorOutliers(
     for (const other of entries) {
       if (other === e) continue;
       if (other.count < t.colorDominantMinCount) continue;
-      if (other.count < e.count * t.colorRatio) continue;
+      if (other.count < e.count * t.colorMinRatio) continue;
       // only compare like with like: opaque vs translucent are different tokens
       if (Math.abs(other.rgb!.a - e.rgb!.a) > 0.05) continue;
       const dE = deltaE(lab, rgbToLab(other.rgb!));
       if (dE > 0 && (!best || dE < best.dE)) best = { entry: other, dE };
     }
-    if (!best || best.dE > t.deltaEMedium) continue;
+    if (!best) continue;
 
-    const confidence: Confidence = best.dE <= t.deltaEHigh ? 'high' : 'medium';
+    // compare against the *nearest* more common color, then grade by how
+    // close it is and how much more common it is
+    const ratio = best.entry.count / e.count;
+    let confidence: Confidence;
+    if (best.dE <= t.deltaEHigh && ratio >= t.colorRatio) confidence = 'high';
+    else if (
+      best.dE <= t.deltaEHigh ||
+      (best.dE <= t.deltaEMedium && ratio >= t.colorRatio)
+    )
+      confidence = 'medium';
+    else continue;
     out.push({
       id: `color:${e.value}`,
       category: 'colors',

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { checkBreakpoints } from '@rules/breakpoints.rules.js';
+import { parseWidthConditions } from '@extractors/breakpoints.js';
 import type { BreakpointsData } from '@extractors/breakpoints.js';
 
 function makeData(overrides: Partial<BreakpointsData> = {}): BreakpointsData {
@@ -92,5 +93,52 @@ describe('checkBreakpoints', () => {
         severity: 'pass',
       })
     );
+  });
+});
+
+describe('parseWidthConditions', () => {
+  it('parses legacy min/max-width, including combined queries', () => {
+    expect(
+      parseWidthConditions('(min-width: 768px) and (max-width: 64em)')
+    ).toEqual([
+      { type: 'min-width', value: 768 },
+      { type: 'max-width', value: 1024 },
+    ]);
+  });
+
+  it('parses range syntax as emitted by Tailwind v4', () => {
+    expect(parseWidthConditions('(width>=48rem)')).toEqual([
+      { type: 'min-width', value: 768 },
+    ]);
+    expect(parseWidthConditions('(width >= 1024px)')).toEqual([
+      { type: 'min-width', value: 1024 },
+    ]);
+    expect(parseWidthConditions('(width < 40rem)')).toEqual([
+      { type: 'max-width', value: 640 },
+    ]);
+  });
+
+  it('parses reversed and double-sided ranges', () => {
+    expect(parseWidthConditions('(48rem <= width)')).toEqual([
+      { type: 'min-width', value: 768 },
+    ]);
+    expect(parseWidthConditions('(40rem <= width < 64rem)')).toEqual([
+      { type: 'min-width', value: 640 },
+      { type: 'max-width', value: 1024 },
+    ]);
+  });
+
+  it('inverts direction for "not all and (...)" (Tailwind max-* variants)', () => {
+    expect(parseWidthConditions('not all and (width >= 48rem)')).toEqual([
+      { type: 'max-width', value: 768 },
+    ]);
+  });
+
+  it('ignores non-width features', () => {
+    expect(parseWidthConditions('(hover: hover)')).toEqual([]);
+    expect(parseWidthConditions('(prefers-reduced-motion: reduce)')).toEqual(
+      []
+    );
+    expect(parseWidthConditions('(min-height: 600px)')).toEqual([]);
   });
 });
