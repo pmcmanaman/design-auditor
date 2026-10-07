@@ -71,7 +71,9 @@ function makeRun(): RunResult {
           elementCount: 1,
           truncated: false,
           distributions: {
-            'font-size': { '16px': { count: 3, examples: ['p'] } },
+            'font-size': {
+              '16px': { count: 3, examples: [{ selector: 'p' }] },
+            },
           },
           groups: {},
         },

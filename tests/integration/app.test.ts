@@ -285,6 +285,31 @@ describe.skipIf(!hasChromium)('authenticated crawl against fixture app', () => {
     }
   }, 60_000);
 
+  it('snapshots strip scripts, handlers, frames and secrets but keep form state', async () => {
+    const snapDir = path.join(dir, 'snap-unit');
+    const run = await runAudit(
+      options({
+        url: `${server.url}/public/tailwind`,
+        crawl: { ...options().crawl, enabled: false },
+        snapshotDir: snapDir,
+      })
+    );
+    const file = run.pages[0].snapshot!;
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(readFileSync(path.join(snapDir, '.gitignore'), 'utf-8')).toBe('*\n');
+    const html = readFileSync(file, 'utf-8');
+    expect(html).not.toMatch(/<script/i);
+    expect(html).not.toMatch(/onclick=/i);
+    expect(html).not.toMatch(/<iframe/i);
+    expect(html).not.toContain('snapshot-must-not-keep-this');
+    expect(html).not.toContain('hidden-token-123');
+    expect(html).not.toContain('meta-csrf-456');
+    expect(html).toContain('value="typed by user"'); // state set by the app's JS is kept
+    expect(html).toContain("connect-src 'none'");
+    expect(html).toMatch(/data-da-i="\d+"/);
+    expect(html).toContain('action="#"');
+  }, 60_000);
+
   describe('CLI', () => {
     it('exits 2 with guidance when the storage state is invalid', async () => {
       writeFileSync(path.join(dir, 'garbage.json'), 'sk_live_not_json');
@@ -374,6 +399,126 @@ describe.skipIf(!hasChromium)('authenticated crawl against fixture app', () => {
         /^<!doctype html>/
       );
     }, 120_000);
+
+    it('--snapshots with --format html links a fixed version of each page', async () => {
+      const r = await cli([
+        `${server.url}/dashboard`,
+        '--crawl',
+        '--max-depth',
+        '1',
+        '--storage-state',
+        statePath,
+        '--only',
+        'typography',
+        '--snapshots',
+        '--format',
+        'html',
+        '--output',
+        'snap/audit.html',
+      ]);
+      expect(r.status).toBe(0);
+      const report = readFileSync(path.join(dir, 'snap/audit.html'), 'utf-8');
+      const hrefs = [...report.matchAll(/href="(audit-pages\/[^"#]+)/g)].map(
+        (m) => m[1]
+      );
+      expect(hrefs.length).toBeGreaterThan(0);
+      for (const h of hrefs)
+        expect(existsSync(path.join(dir, 'snap', decodeURIComponent(h)))).toBe(
+          true
+        );
+      expect(report).toContain('fixed.html#da-group-h2-typography-15px-500');
+
+      const browser = await chromium.launch();
+      try {
+        const page = await browser.newPage();
+        const style = (sel: string) =>
+          page.$eval(sel, (e) => {
+            const s = getComputedStyle(e);
+            return {
+              size: s.fontSize,
+              weight: s.fontWeight,
+              radius: s.borderRadius,
+              color: s.color,
+            };
+          });
+        const fixed = (name: string) =>
+          'file://' + path.join(dir, 'snap/audit-pages', name);
+        const billing = hrefs.find((h) =>
+          h.endsWith('settings-billing.fixed.html')
+        )!;
+        await page.goto('file://' + path.join(dir, 'snap', billing));
+        expect(await style('[data-testid="billing-heading"]')).toMatchObject({
+          size: '18px',
+          weight: '600',
+        });
+        // toolbar toggle: fixes off shows the original
+        await page.evaluate(() => {
+          const host = [...document.body.children].find(
+            (el) => el.shadowRoot
+          ) as HTMLElement;
+          (host.shadowRoot!.getElementById('on') as HTMLButtonElement).click();
+        });
+        expect(await style('[data-testid="billing-heading"]')).toMatchObject({
+          size: '15px',
+          weight: '500',
+        });
+
+        const orders = hrefs.find((h) => h.endsWith('-orders.fixed.html'))!;
+        await page.goto('file://' + path.join(dir, 'snap', orders));
+        expect((await style('[data-testid="bulk-export"]')).radius).toBe('8px');
+
+        const profile = hrefs.find((h) =>
+          h.endsWith('settings-profile.fixed.html')
+        )!;
+        await page.goto('file://' + path.join(dir, 'snap', profile));
+        expect((await style('[data-testid="profile-hint"]')).color).toBe(
+          'rgb(59, 130, 246)'
+        );
+      } finally {
+        await browser.close();
+      }
+    }, 180_000);
+
+    it('report regenerates fixed pages from a JSON report made with --snapshots', async () => {
+      const r1 = await cli([
+        `${server.url}/settings/billing`,
+        '--storage-state',
+        statePath,
+        '--only',
+        'typography',
+        '--snapshots',
+        '--format',
+        'json',
+        '--output',
+        'snapjson/audit.json',
+      ]);
+      expect(r1.status).toBe(0);
+      const json = JSON.parse(
+        readFileSync(path.join(dir, 'snapjson/audit.json'), 'utf-8')
+      );
+      expect(json.pages[0].snapshot).toBe(
+        'audit-pages/01-settings-billing.html'
+      );
+
+      const r2 = await cli([
+        'report',
+        'snapjson/audit.json',
+        '-o',
+        'elsewhere/report.html',
+      ]);
+      expect(r2.status).toBe(0);
+      expect(
+        existsSync(
+          path.join(dir, 'snapjson/audit-pages/01-settings-billing.fixed.html')
+        )
+      ).toBe(true);
+      // links are relative to the HTML file, which lives in another folder
+      expect(
+        readFileSync(path.join(dir, 'elsewhere/report.html'), 'utf-8')
+      ).toContain(
+        'href="../snapjson/audit-pages/01-settings-billing.fixed.html"'
+      );
+    }, 180_000);
 
     it('prints JSON to stdout and nothing else there', async () => {
       const r = await cli([

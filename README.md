@@ -493,6 +493,7 @@ Options:
   --fail-on <confidence>    Exit 4 on consistency findings: high or medium
   --max-findings <n>        Consistency findings shown per category (default 10)
   --verbose                 Print full per-page module reports when crawling
+  --snapshots               Save a static copy of each page (+ a fixed version with html)
   -V, --version             Show version number
   -h, --help                Show help
 ```
@@ -510,6 +511,40 @@ design-auditor https://app.example.com --crawl --storage-state .design-auditor/a
 # or render a JSON report you already have
 design-auditor report audit.json            # → audit.html
 ```
+
+### Fixed-page previews
+
+Add `--snapshots` to keep a static copy of every audited page and generate a **fixed version** with the page's findings applied:
+
+```bash
+design-auditor https://app.example.com --crawl --storage-state .design-auditor/auth.json \
+  --snapshots --format html --output audit/audit.html
+```
+
+```
+audit/
+  audit.html
+  audit-pages/
+    01-dashboard.html          static snapshot, as the crawler saw it
+    01-dashboard.fixed.html    same page with high/medium findings applied
+    …
+```
+
+Each page in `audit.html` gets **Open fixed version** and **Open snapshot** buttons, and each finding gets **Preview fix**, which jumps to the element. The fixed page has a small toolbar: **Fixes on/off** switches between the original and corrected look, **Highlight** outlines the changed elements, and the list of applied fixes scrolls to each one. Open the live site next to it to compare.
+
+Fixes are CSS overrides on the exact element that was measured:
+
+- group typography sets the group's size and weight
+- radius, padding, border width, shadow and height take the group's common value
+- spacing outliers change only the side that carried the odd value
+- near-duplicate colors switch to the common color
+- a browser-default font gets the app's font
+
+Palette-level problems, like two gray scales, aren't auto-fixed.
+
+Snapshots are static. App scripts, frames and event handlers are removed, and a CSP blocks network calls and form submissions. Password, hidden-input and CSRF values are stripped, but everything visible on the page is kept, including customer data. The snapshot folder gets a `*` `.gitignore`, files are written `0600`, and they should be handled like screenshots of the app. Images and fonts still load from the live site when you're online. Content that needs a login or a hover state may not appear.
+
+`--snapshots` also works with `--format json`. `design-auditor report audit.json` then generates the fixed versions and links them.
 
 The page has filterable, searchable consistency findings with color swatches and click-to-copy selectors. It also groups recurring module issues across pages, shows per-page reports and score bars, charts the design values in use, and lists the links the crawler skipped. It works offline and makes no network requests, enforced with a Content-Security-Policy. All text from the audited site is escaped. The report can contain page text from the audited application, so share it the way you would share screenshots of that app.
 

@@ -16,7 +16,10 @@ function dist(
   return Object.fromEntries(
     Object.entries(values).map(([v, count]) => [
       v,
-      { count, examples: [`.${page}-${v.replace(/[^\w]/g, '')}`] },
+      {
+        count,
+        examples: [{ selector: `.${page}-${v.replace(/[^\w]/g, '')}` }],
+      },
     ])
   );
 }
@@ -353,7 +356,11 @@ describe('detectOutliers — component groups', () => {
       ),
       snapshot(
         'https://a.test/2',
-        { 'border-radius': { '6px': { count: 1, examples: ['#export'] } } },
+        {
+          'border-radius': {
+            '6px': { count: 1, examples: [{ selector: '#export' }] },
+          },
+        },
         {
           'button-primary': [
             sample('button-primary', {

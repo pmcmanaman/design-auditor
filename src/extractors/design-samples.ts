@@ -2,10 +2,22 @@ import { Page } from 'playwright';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+// Points at one element: a readable selector, plus `ref`, the element's
+// data-da-i stamp (exact even when the selector matches several elements),
+// and the precise CSS property that carries the value (e.g. padding-top)
+export interface ElementRef {
+  selector: string;
+  ref?: string;
+  property?: string;
+}
+
 export interface ValueStat {
   count: number;
-  examples: string[]; // CSS selectors of a few elements using the value
+  examples: ElementRef[]; // a few elements using the value
 }
+
+// attribute stamped on every measured element; snapshots keep it
+export const REF_ATTR = 'data-da-i';
 
 // property → value → stat
 export type Distributions = Record<string, Record<string, ValueStat>>;
@@ -30,6 +42,7 @@ export type ComponentGroup =
 export interface ComponentSample {
   group: ComponentGroup;
   selector: string;
+  ref?: string;
   text: string;
   tag: string;
   fontFamily: string;
@@ -77,6 +90,7 @@ export async function extractDesignSamples(
   options: Partial<DesignSampleOptions> = {}
 ): Promise<PageDesignSnapshot> {
   const opts = { ...DEFAULT_SAMPLE_OPTIONS, ...options };
+  const evalOpts = { ...opts, refAttr: REF_ATTR };
 
   const raw = await page.evaluate((o) => {
     const SKIP = new Set([
@@ -96,7 +110,13 @@ export async function extractDesignSamples(
 
     const distributions: Record<
       string,
-      Record<string, { count: number; examples: string[] }>
+      Record<
+        string,
+        {
+          count: number;
+          examples: { selector: string; ref: string; property: string }[];
+        }
+      >
     > = {};
     const groups: Record<string, unknown[]> = {};
 
@@ -200,12 +220,21 @@ export async function extractDesignSamples(
     };
 
     // ── Recording ──
-    const record = (prop: string, value: string, el: Element) => {
+    const record = (
+      prop: string,
+      value: string,
+      el: Element,
+      property: string = prop
+    ) => {
       const byValue = (distributions[prop] ||= {});
       const stat = (byValue[value] ||= { count: 0, examples: [] });
       stat.count++;
       if (stat.examples.length < o.maxExamples)
-        stat.examples.push(selectorFor(el));
+        stat.examples.push({
+          selector: selectorFor(el),
+          ref: el.getAttribute(o.refAttr) || '',
+          property,
+        });
     };
 
     const px = (v: string) => {
@@ -430,6 +459,7 @@ export async function extractDesignSamples(
       const rect = el.getBoundingClientRect();
       if (rect.width === 0 && rect.height === 0) continue;
       counted++;
+      el.setAttribute(o.refAttr, String(counted));
 
       // Typography — only where the element renders its own text, otherwise
       // every wrapper div would count the inherited body size
@@ -493,17 +523,23 @@ export async function extractDesignSamples(
       const mr = px(style.marginRight);
       const vertical: number[] = [];
       const horizontal: number[] = [];
-      for (const v of [mt, mb]) {
+      for (const [side, v] of [
+        ['margin-top', mt],
+        ['margin-bottom', mb],
+      ] as const) {
         if (v > 0 && !isLayoutMargin(v)) {
-          record('margin', v + 'px', el);
+          record('margin', v + 'px', el, side);
           vertical.push(v);
         }
       }
       // symmetric large side margins are almost always `margin: 0 auto`
       if (!(ml === mr && ml > 32)) {
-        for (const v of [ml, mr]) {
+        for (const [side, v] of [
+          ['margin-left', ml],
+          ['margin-right', mr],
+        ] as const) {
           if (v > 0 && !isLayoutMargin(v)) {
-            record('margin', v + 'px', el);
+            record('margin', v + 'px', el, side);
             horizontal.push(v);
           }
         }
@@ -512,15 +548,21 @@ export async function extractDesignSamples(
       const pb = px(style.paddingBottom);
       const pl = px(style.paddingLeft);
       const pr = px(style.paddingRight);
-      for (const v of [pt, pb]) {
+      for (const [side, v] of [
+        ['padding-top', pt],
+        ['padding-bottom', pb],
+      ] as const) {
         if (v > 0) {
-          record('padding', v + 'px', el);
+          record('padding', v + 'px', el, side);
           vertical.push(v);
         }
       }
-      for (const v of [pl, pr]) {
+      for (const [side, v] of [
+        ['padding-left', pl],
+        ['padding-right', pr],
+      ] as const) {
         if (v > 0) {
-          record('padding', v + 'px', el);
+          record('padding', v + 'px', el, side);
           horizontal.push(v);
         }
       }
@@ -528,10 +570,10 @@ export async function extractDesignSamples(
         const rg = px(style.rowGap);
         const cg = px(style.columnGap);
         if (rg > 0) {
-          record('gap', rg + 'px', el);
+          record('gap', rg + 'px', el, cg === rg ? 'gap' : 'row-gap');
           vertical.push(rg);
         }
-        if (cg > 0 && cg !== rg) record('gap', cg + 'px', el);
+        if (cg > 0 && cg !== rg) record('gap', cg + 'px', el, 'column-gap');
         if (cg > 0) horizontal.push(cg);
       }
       vertical.forEach((v) => record('spacing-vertical', v + 'px', el));
@@ -545,6 +587,7 @@ export async function extractDesignSamples(
           list.push({
             group,
             selector: selectorFor(el),
+            ref: el.getAttribute(o.refAttr) || undefined,
             text: (
               ((el as HTMLElement).innerText || el.textContent || '').trim() ||
               (el as HTMLInputElement).value ||
@@ -589,7 +632,7 @@ export async function extractDesignSamples(
       distributions,
       groups,
     };
-  }, opts);
+  }, evalOpts);
 
   return {
     url: page.url(),

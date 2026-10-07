@@ -1,4 +1,5 @@
-import { writeFileSync } from 'fs';
+import { mkdirSync, writeFileSync } from 'fs';
+import path from 'path';
 import { ModuleReport } from '@/types.js';
 import { calculateScore, AuditScore } from '@utils/score.js';
 import type { RunResult } from '@/run.js';
@@ -27,6 +28,7 @@ export interface PageJson {
   score?: AuditScore;
   summary?: Summary;
   modules?: ModuleReport[];
+  snapshot?: string; // static snapshot, relative to the report file
 }
 
 export interface AppJsonReport extends JsonReport {
@@ -72,7 +74,15 @@ export function buildJsonReport(
 
 // Superset of JsonReport: the top-level fields keep their single-page meaning
 // (first audited page, normally the start URL) so existing consumers keep working
-export function buildAppReport(run: RunResult): AppJsonReport {
+export function buildAppReport(
+  run: RunResult,
+  opts: { reportDir?: string } = {}
+): AppJsonReport {
+  const rel = (p: string) =>
+    path
+      .relative(path.resolve(opts.reportDir ?? '.'), p)
+      .split(path.sep)
+      .join('/');
   const audited = run.pages.filter((p) => p.audit);
   const first = audited[0];
   const legacy = buildJsonReport(run.startUrl, first?.audit?.reports ?? []);
@@ -88,6 +98,7 @@ export function buildAppReport(run: RunResult): AppJsonReport {
       status: p.status,
       outcome: p.outcome,
       ...(p.error ? { error: p.error } : {}),
+      ...(p.snapshot ? { snapshot: rel(p.snapshot) } : {}),
       ...(p.audit
         ? {
             score: p.audit.score,
@@ -132,6 +143,7 @@ export function saveReport(report: JsonReport): string {
 }
 
 export function writeReport(report: JsonReport, filePath: string): string {
+  mkdirSync(path.dirname(path.resolve(filePath)), { recursive: true });
   writeFileSync(filePath, JSON.stringify(report, null, 2), 'utf-8');
   return filePath;
 }

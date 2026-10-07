@@ -8,6 +8,9 @@ export interface Example {
   url: string;
   selector: string;
   text?: string;
+  // data-da-i stamp and exact CSS property, used to apply fixes to snapshots
+  ref?: string;
+  property?: string;
 }
 
 export interface AggregatedValue {
@@ -54,9 +57,9 @@ export class DesignAggregator {
         }
         entry.count += stat.count;
         entry.pages.add(snapshot.url);
-        for (const selector of stat.examples) {
+        for (const ex of stat.examples) {
           if (entry.examples.length >= MAX_EXAMPLES) break;
-          entry.examples.push({ url: snapshot.url, selector });
+          entry.examples.push({ url: snapshot.url, ...ex });
         }
       }
     }

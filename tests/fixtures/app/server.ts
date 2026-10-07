@@ -293,7 +293,8 @@ function spaLoginPage() {
 
 // Patterns Tailwind v4 apps produce, which the extractors must normalize
 function tailwindPage() {
-  return `<!doctype html><html><head><title>Tailwind patterns</title><style>
+  return `<!doctype html><html><head><title>Tailwind patterns</title>
+    <meta name="csrf-token" content="meta-csrf-456"><style>
     body { font-family: Arial, sans-serif; margin: 0; }
     .pill { border-radius: calc(infinity * 1px); padding: 4px 12px; background: #e5e7eb; }
     .ringed { box-shadow: 0 0 #0000, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(16, 24, 40, 0.1) 0px 1px 2px 0px; padding: 16px; }
@@ -312,6 +313,14 @@ function tailwindPage() {
     <div role="combobox" aria-expanded="false" class="pale" data-testid="combo" tabindex="0">Select assignee</div>
     <label data-testid="check-label"><input type="checkbox"> I agree</label>
     <label for="f" data-testid="field-label">Name</label><input id="f">
+    <form action="/account/update" method="post">
+      <input type="password" id="pw" value="snapshot-must-not-keep-this">
+      <input type="hidden" name="csrf" value="hidden-token-123">
+      <input type="text" id="typed">
+      <button type="submit" onclick="window.__clicked = true">Save</button>
+    </form>
+    <iframe src="/public/tailwind" style="width:200px;height:80px"></iframe>
+    <script>window.__appScriptRan = true; document.getElementById('typed').value = 'typed by user';</script>
   </body></html>`;
 }
 

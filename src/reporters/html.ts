@@ -1,5 +1,9 @@
 import type { AppJsonReport, JsonReport, PageJson } from '@reporters/json.js';
 import type { ModuleReport, Violation } from '@/types.js';
+import type { PageLinks } from '@reporters/snapshots.js';
+import { fixAnchor } from '@reporters/fixes.js';
+
+type Links = Map<string, PageLinks>;
 
 // Self-contained HTML report: inline CSS/JS, no external requests, so it can
 // be opened offline and never leaks audit data. Everything that comes from
@@ -103,7 +107,26 @@ function normalize(report: JsonReport | AppJsonReport): AppJsonReport {
 
 // ─── Sections ─────────────────────────────────────────────────────────────────
 
-function findingCard(f: Finding): string {
+// relative file link from audit.html; encodes each path segment
+function fileHref(rel: string, anchor = ''): string {
+  return esc(
+    rel.split('/').map(encodeURIComponent).join('/') +
+      (anchor ? `#${anchor}` : '')
+  );
+}
+
+function previewLink(f: Finding, links: Links): string {
+  const anchor = fixAnchor(f.id);
+  for (const page of f.pages) {
+    const l = links.get(page);
+    if (l && l.anchors.has(anchor)) {
+      return `<a class="btn" href="${fileHref(l.fixed, anchor)}" target="_blank" rel="noopener">Preview fix</a>`;
+    }
+  }
+  return '';
+}
+
+function findingCard(f: Finding, links: Links): string {
   const where =
     f.pages.length === 1
       ? `<a href="${safeHref(f.pages[0])}" target="_blank" rel="noopener noreferrer">${esc(pathOf(f.pages[0]))}</a>`
@@ -143,10 +166,11 @@ function findingCard(f: Finding): string {
     <ul class="examples">${examples}</ul>
     <p class="reason">${withSwatches(f.reason)}</p>
     <p class="suggest">${esc(f.suggestion)}</p>
+    ${previewLink(f, links)}
   </article>`;
 }
 
-function findingsSection(findings: Finding[]): string {
+function findingsSection(findings: Finding[], links: Links): string {
   const categories = [...new Set(findings.map((f) => f.category))];
   const n = (c: string) => findings.filter((f) => f.confidence === c).length;
   if (findings.length === 0) {
@@ -168,7 +192,7 @@ function findingsSection(findings: Finding[]): string {
       <input type="search" id="q" placeholder="Search selector, page, value…" aria-label="Search findings">
     </div>
     <p class="muted" id="shown"></p>
-    <div class="grid">${findings.map(findingCard).join('')}</div>
+    <div class="grid">${findings.map((f) => findingCard(f, links)).join('')}</div>
   </section>`;
 }
 
@@ -191,7 +215,18 @@ function violationList(modules: ModuleReport[]): string {
     .join('');
 }
 
-function pagesSection(pages: PageJson[]): string {
+function pageButtons(p: PageJson, links: Links): string {
+  // duplicates share the final URL with the audited row; only that one links
+  const l = p.modules ? links.get(p.finalUrl) : undefined;
+  if (!l) return '';
+  return `<div class="page-actions">
+    <a class="btn primary" href="${fileHref(l.fixed)}" target="_blank" rel="noopener">Open fixed version (${l.fixCount} ${l.fixCount === 1 ? 'fix' : 'fixes'})</a>
+    <a class="btn" href="${fileHref(l.snapshot)}" target="_blank" rel="noopener">Open snapshot</a>
+    <span class="muted">Static copies captured during the crawl. Use the toolbar in the fixed version to switch fixes on and off.</span>
+  </div>`;
+}
+
+function pagesSection(pages: PageJson[], links: Links): string {
   // audited pages first (crawl order), then duplicates/failures
   const ordered = [
     ...pages.filter((p) => p.modules),
@@ -215,12 +250,17 @@ function pagesSection(pages: PageJson[]): string {
               : `<span class="outcome">${esc(p.outcome)}${p.outcome === 'duplicate' ? ` of ${esc(pathOf(p.finalUrl))}` : ''}${p.error ? ` — ${esc(p.error)}` : ''}</span>`
           }
         </summary>
+        ${pageButtons(p, links)}
         ${audited ? `<div class="modules">${violationList(p.modules!)}</div>` : ''}
         <div class="muted meta">depth ${esc(p.depth)}${p.referrer ? ` · from ${esc(pathOf(p.referrer))}` : ''}${p.status ? ` · HTTP ${esc(p.status)}` : ''}${audited && p.url !== p.finalUrl ? ` · requested ${esc(pathOf(p.url))}` : ''}</div>
       </details>`;
     })
     .join('');
-  return `<section id="pages"><h2>Pages</h2>${rows}</section>`;
+  const hint =
+    links.size === 0 && ordered.some((p) => p.modules)
+      ? `<p class="muted">Run with <code>--snapshots</code> to get a static copy of each page plus a version with the findings applied, linked from here.</p>`
+      : '';
+  return `<section id="pages"><h2>Pages</h2>${hint}${rows}</section>`;
 }
 
 // Same issue on many pages, grouped by message shape ("15/27 buttons…")
@@ -352,7 +392,10 @@ function crawlSection(r: AppJsonReport): string {
 
 // ─── Document ─────────────────────────────────────────────────────────────────
 
-export function renderHtmlReport(input: JsonReport | AppJsonReport): string {
+export function renderHtmlReport(
+  input: JsonReport | AppJsonReport,
+  links: Links = new Map()
+): string {
   const r = normalize(input);
   const host = (() => {
     try {
@@ -392,9 +435,9 @@ export function renderHtmlReport(input: JsonReport | AppJsonReport): string {
     <div class="stat"><div class="k">High-confidence findings</div><div class="v c-err">${n('high')}</div></div>
     <div class="stat"><div class="k">Medium-confidence findings</div><div class="v c-warn">${n('medium')}</div></div>
   </section>
-  ${findingsSection(findings)}
+  ${findingsSection(findings, links)}
   ${recurringSection(r.pages)}
-  ${pagesSection(r.pages)}
+  ${pagesSection(r.pages, links)}
   ${tokensSection(r.globalAnalysis)}
   ${crawlSection(r)}
 </main>
@@ -489,6 +532,11 @@ tr:last-child td{border-bottom:0}
 ul.plain{padding-left:18px}
 footer{max-width:1200px;margin:0 auto;padding:16px;font-size:12px}
 .hidden{display:none}
+.btn{display:inline-block;margin-top:8px;padding:5px 10px;border-radius:6px;border:1px solid var(--line);background:var(--chip);color:var(--text);text-decoration:none;font-size:13px}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.page-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:0 14px 8px}
+.page-actions .btn{margin-top:0}
+.page-actions .muted{font-size:12px}
 `;
 
 const JS = `

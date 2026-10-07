@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { Command, InvalidArgumentError } from 'commander';
@@ -20,6 +20,7 @@ import {
   writeReport,
 } from '@reporters/json.js';
 import { renderHtmlReport } from '@reporters/html.js';
+import { writeFixedPages } from '@reporters/snapshots.js';
 import { MODULES, resolveModules } from '@/audit/modules.js';
 import { isLocalUrl } from '@/browser/navigate.js';
 import { AuditorConfig, isFormAuth, loadConfig } from '@/config.js';
@@ -70,6 +71,12 @@ function errorMessage(err: unknown): string {
   if (err instanceof AuditorError) return err.message;
   const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
   return redactSecrets(msg);
+}
+
+// write a report file, creating its folder if needed
+function writeOutput(file: string, content: string) {
+  mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
+  writeFileSync(file, content, 'utf-8');
 }
 
 function defaultHtmlPath(url: string): string {
@@ -148,6 +155,10 @@ program
     10
   )
   .option('--verbose', 'Print full per-page module reports when crawling')
+  .option(
+    '--snapshots',
+    'Save a static copy of each audited page (and, with --format html, a version with the findings applied)'
+  )
   .action(async (url: string, options) => {
     const json = options.format === 'json';
     const html = options.format === 'html';
@@ -188,6 +199,19 @@ program
         );
       }
 
+      // where the report lands decides where snapshots go and how they're linked
+      const reportFile = path.resolve(
+        html
+          ? (options.output ?? defaultHtmlPath(url))
+          : json && options.output
+            ? options.output
+            : defaultHtmlPath(url).replace(/\.html$/, '.json')
+      );
+      const reportDir = path.dirname(reportFile);
+      const snapshotDir = options.snapshots
+        ? reportFile.replace(/\.[^./\\]+$/, '') + '-pages'
+        : undefined;
+
       const run = await runAudit({
         url,
         modules,
@@ -195,6 +219,7 @@ program
         storageStatePath: options.storageState,
         auth: config.auth,
         crawl,
+        snapshotDir,
         onProgress: (message) => {
           spinner.text = message;
         },
@@ -203,13 +228,20 @@ program
 
       spinner.succeed('Done');
 
-      const report = buildAppReport(run);
+      const report = buildAppReport(run, { reportDir });
       const outliers = run.globalAnalysis.outliers;
+      if (snapshotDir) {
+        console.error(
+          `Page snapshots written → ${path.relative(process.cwd(), snapshotDir) || snapshotDir} (they contain page content; handle like screenshots)`
+        );
+      }
 
       if (html) {
-        const file = options.output ?? defaultHtmlPath(url);
-        writeFileSync(file, renderHtmlReport(report), 'utf-8');
-        console.error(`HTML report written → ${file}`);
+        const links = writeFixedPages(report, reportDir);
+        writeOutput(reportFile, renderHtmlReport(report, links));
+        console.error(
+          `HTML report written → ${options.output ?? path.basename(reportFile)}`
+        );
       } else if (json) {
         if (options.output) {
           writeReport(report, options.output);
@@ -318,7 +350,12 @@ program
         );
       }
       const out = options.output ?? jsonFile.replace(/\.json$/i, '') + '.html';
-      writeFileSync(out, renderHtmlReport(report), 'utf-8');
+      const links = writeFixedPages(
+        report,
+        path.dirname(path.resolve(jsonFile)),
+        path.dirname(path.resolve(out))
+      );
+      writeOutput(out, renderHtmlReport(report, links));
       console.error(`HTML report written → ${out}`);
     } catch (err) {
       console.error(errorMessage(err));

@@ -27,6 +27,9 @@ import {
 import { isSameOrigin } from '@/crawl/url.js';
 import { extractLinks } from '@/crawl/links.js';
 import { extractDesignSamples } from '@extractors/design-samples.js';
+import { captureSnapshot } from '@extractors/snapshot.js';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import path from 'path';
 import { DesignAggregator } from '@/analysis/aggregate.js';
 import {
   GlobalAnalysis,
@@ -53,6 +56,8 @@ export interface RunOptions {
   auth?: AuthConfig;
   crawl: CrawlSettings;
   thresholds?: Partial<Thresholds>;
+  // write a static snapshot of every audited page into this directory
+  snapshotDir?: string;
   onProgress?: (message: string) => void;
   onWarning?: (message: string) => void;
 }
@@ -62,9 +67,11 @@ export interface PageAudit {
   score: AuditScore;
   elementCount: number;
   truncated: boolean;
+  snapshot?: string; // absolute path of the static snapshot, if captured
 }
 
 export interface PageResult {
+  snapshot?: string;
   url: string;
   finalUrl: string;
   title: string;
@@ -129,11 +136,14 @@ export async function runAudit(opts: RunOptions): Promise<RunResult> {
     }
 
     const aggregator = new DesignAggregator();
+    if (opts.snapshotDir) prepareSnapshotDir(opts.snapshotDir);
+    const counter = { audited: 0 };
     const visit = (url: string, ctx: VisitContext) =>
       visitPage(page, url, ctx, {
         ...opts,
         authConfigured,
         aggregator,
+        counter,
         progress,
         warn,
       });
@@ -197,6 +207,7 @@ export async function runAudit(opts: RunOptions): Promise<RunResult> {
 interface VisitDeps extends RunOptions {
   authConfigured: boolean;
   aggregator: DesignAggregator;
+  counter: { audited: number };
   progress: (message: string) => void;
   warn: (message: string) => void;
 }
@@ -273,6 +284,18 @@ async function visitPage(
   deps.progress(`${pathOf(finalUrl)} — collecting design values`);
   const snapshot = await extractDesignSamples(page);
   deps.aggregator.add(snapshot);
+  deps.counter.audited++;
+
+  let snapshotPath: string | undefined;
+  if (deps.snapshotDir) {
+    deps.progress(`${pathOf(finalUrl)} — saving snapshot`);
+    const snap = await captureSnapshot(page);
+    snapshotPath = path.join(
+      deps.snapshotDir,
+      `${String(deps.counter.audited).padStart(2, '0')}-${slugify(finalUrl)}.html`
+    );
+    writeFileSync(snapshotPath, snap.html, { encoding: 'utf-8', mode: 0o600 });
+  }
 
   return {
     ...result,
@@ -283,6 +306,7 @@ async function visitPage(
       score: calculateScore(reports),
       elementCount: snapshot.elementCount,
       truncated: snapshot.truncated,
+      snapshot: snapshotPath,
     },
   };
 }
@@ -298,7 +322,32 @@ function toPageResult(p: CrawledPage<PageAudit>): PageResult {
     outcome: p.outcome,
     error: p.error,
     audit: p.data,
+    snapshot: p.data?.snapshot,
   };
+}
+
+// "/settings/billing?tab=2" → "settings-billing-tab-2"
+export function slugify(url: string): string {
+  const slug = pathOf(url)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+  return slug || 'home';
+}
+
+const SNAPSHOT_README = `These are static snapshots of audited pages, written by design-auditor.
+
+They contain whatever the pages showed when they were captured, which can
+include customer data, names and other content from the audited application.
+Handle them like screenshots of the app, and do not commit them.
+`;
+
+function prepareSnapshotDir(dir: string) {
+  mkdirSync(dir, { recursive: true });
+  const gitignore = path.join(dir, '.gitignore');
+  if (!existsSync(gitignore)) writeFileSync(gitignore, '*\n', 'utf-8');
+  writeFileSync(path.join(dir, 'README.txt'), SNAPSHOT_README, 'utf-8');
 }
 
 export function pathOf(url: string): string {

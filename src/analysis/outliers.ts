@@ -481,6 +481,7 @@ export function detectGroupOutliers(
             url: d.url,
             selector: d.selector,
             text: d.text,
+            ref: d.ref,
           })),
           dominant: { value: modeValue, count: modeSamples.length },
           group,
