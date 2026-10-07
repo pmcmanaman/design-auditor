@@ -1,0 +1,13 @@
+{
+  "auth": {
+    "type": "form",
+    "loginUrl": "http://127.0.0.1:4321/spa/login",
+    "username": { "selector": "input[type=text]", "env": "FIXTURE_USER" },
+    "password": {
+      "selector": "input[type=password]",
+      "env": "FIXTURE_PASSWORD"
+    },
+    "submit": { "selector": "button:has-text(\"Sign In\")" },
+    "success": { "urlContains": "/spa/home" }
+  }
+}
